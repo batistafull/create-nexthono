@@ -66,12 +66,6 @@ To regenerate it from the parent project:
 npm run sync
 ```
 
-## Publishing
-
-```bash
-npm publish --access public
-```
-
 ## License
 
 MIT
