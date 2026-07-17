@@ -22,6 +22,7 @@ const EXCLUDES = new Set([
   "bun.lockb",
   "next-env.d.ts",
   ".DS_Store",
+  ".claude"
 ]);
 
 // Files renamed so npm won't strip/interpret them when the package is published.
