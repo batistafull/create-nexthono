@@ -1,0 +1,9 @@
+# --- App ---
+NODE_ENV=development
+
+# --- Database (local SQLite) ---
+DATABASE_PATH=./data/app.db
+
+# --- Auth ---
+JWT_SECRET=change-me
+JWT_EXPIRES_IN=7d

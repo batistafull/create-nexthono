@@ -1,0 +1,40 @@
+{
+  "name": "create-nexthono",
+  "version": "0.1.0",
+  "description": "Scaffold a Next.js (App Router) + Hono full-stack starter with SQLite, JWT auth and a seeded admin user.",
+  "type": "module",
+  "bin": {
+    "create-nexthono": "index.js"
+  },
+  "files": [
+    "index.js",
+    "template",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "keywords": [
+    "create",
+    "nextjs",
+    "hono",
+    "sqlite",
+    "jwt",
+    "starter",
+    "template",
+    "scaffold"
+  ],
+  "scripts": {
+    "sync": "node scripts/sync-template.mjs"
+  },
+  "author": "batistafull <albertomimi16@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/batistafull/create-nexthono.git"
+  },
+  "homepage": "https://github.com/batistafull/create-nexthono#readme",
+  "bugs": {
+    "url": "https://github.com/batistafull/create-nexthono/issues"
+  }
+}

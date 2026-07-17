@@ -1,0 +1,10 @@
+# --- App ---
+NODE_ENV=development
+
+# --- Database (local SQLite) ---
+DATABASE_PATH=./data/app.db
+
+# --- Auth ---
+# Change this in production. Used to sign/verify JWTs.
+JWT_SECRET=dev-super-secret-change-me
+JWT_EXPIRES_IN=7d
