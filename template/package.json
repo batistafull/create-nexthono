@@ -12,7 +12,8 @@
     "format": "biome format --write .",
     "db:migrate": "tsx server/api/database/migrations.ts",
     "db:seed": "tsx server/api/database/seeds.ts",
-    "db:reset": "tsx server/api/database/migrations.ts --fresh && tsx server/api/database/seeds.ts"
+    "db:reset": "tsx server/api/database/migrations.ts --fresh && tsx server/api/database/seeds.ts",
+    "nexthono-module": "tsx scripts/create-module.ts"
   },
   "dependencies": {
     "@batistafull/wytext": "latest",

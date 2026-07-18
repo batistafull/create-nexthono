@@ -14,6 +14,8 @@ las páginas/servicios de usuarios (frontend) son la referencia canónica: cópi
 
 ```
 template/
+├── scripts/
+│   └── create-module.ts        # Generador CRUD interactivo (pnpm nexthono-module, ver §7)
 ├── server/api/                 # Backend Hono (una sola app, montada en /api)
 │   ├── index.ts                # App raíz: middlewares globales + montaje de v1
 │   ├── types.ts                # AppEnv (variables de contexto: user, jwtPayload)
@@ -522,17 +524,97 @@ pnpm db:reset    # Reaplica migraciones desde cero y siembra
 ## 6. Comandos útiles
 
 ```bash
-pnpm dev          # Next dev (frontend + API en el mismo proceso)
-pnpm build        # Build de producción
-pnpm lint         # Biome check
-pnpm lint:fix     # Biome check --write
-pnpm format       # Biome format --write
-pnpm db:migrate   # Migraciones
-pnpm db:seed      # Seeds
-pnpm db:reset     # Reset completo de la BD
+pnpm dev              # Next dev (frontend + API en el mismo proceso)
+pnpm build            # Build de producción
+pnpm lint             # Biome check
+pnpm lint:fix         # Biome check --write
+pnpm format           # Biome format --write
+pnpm db:migrate       # Migraciones
+pnpm db:seed          # Seeds
+pnpm db:reset         # Reset completo de la BD
+pnpm nexthono-module  # Generador interactivo de módulos CRUD (ver sección 7)
 ```
 
-## 7. Convenciones rápidas
+## 7. Generador de módulos (`pnpm nexthono-module`)
+
+Automatiza todo el checklist de las secciones 2–4: crea el módulo backend
+completo, el módulo frontend completo y su migración, siguiendo exactamente
+los mismos patrones que `users`. El script vive en
+[scripts/create-module.ts](scripts/create-module.ts).
+
+```bash
+pnpm nexthono-module
+# o: npm run nexthono-module / yarn nexthono-module / bun run nexthono-module
+```
+
+### Flujo interactivo
+
+1. **Nombre del módulo, en singular** (ej: `product`). El plural (para la
+   tabla, las rutas y las carpetas) se deriva automáticamente con reglas
+   simples de pluralización en inglés (`product` → `products`, `category` →
+   `categories`, `box` → `boxes`). Si el módulo ya existe, el script se
+   detiene sin tocar nada.
+2. **Campos adicionales**, en bucle:
+
+   ```
+   ¿Desea agregar un campo adicional?
+     1) Sí
+     2) No
+   ```
+
+   Al elegir **1) Sí** pregunta, para ese campo:
+   - **Nombre** (se normaliza a `snake_case`; no puede repetir un campo base
+     ni uno ya agregado).
+   - **Tipo de dato**: `string`, `integer`, `decimal`, `boolean` o `date`.
+   - **Longitud máxima** (solo si el tipo es `string`; Enter para omitir).
+   - **¿Es requerido?** (controla `NOT NULL` en SQL, si el campo es
+     obligatorio en Zod/TypeScript, y si aparece marcado con `*` en el
+     formulario del frontend).
+   - **¿Debe ser único?** (agrega un `CREATE UNIQUE INDEX ... WHERE deleted
+     = 0` en la migración y una validación de conflicto —
+     `findBy<Campo>` + `409 Conflict`— en el service, igual que el email en
+     `users`).
+
+   El ciclo se repite hasta responder **2) No**. Los 6 campos base
+   (`id`, `date_entered`, `date_modified`, `create_by`, `modified_by`,
+   `deleted`) se agregan siempre automáticamente; no se piden.
+
+3. Al terminar, genera **todos** los archivos y pregunta si quieres correr
+   `db:migrate` de inmediato.
+
+### Qué genera
+
+**Backend** (`server/api/v1/<plural>/`): `types.ts`, `schema.ts`,
+`repository.ts`, `service.ts`, `controller.ts`, `routes.ts` — más el registro
+automático de las rutas en
+[server/api/index.ts](server/api/index.ts) (import + `v1.route(...)`).
+CRUD completo: `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`,
+con `requireAuth` en todas y `requireRole("admin")` en las de escritura,
+igual que `users`.
+
+**Migración**: `server/api/database/migrations/<NNN>_<plural>.sql` con el
+siguiente prefijo numérico disponible.
+
+**Frontend**: `src/types/<singular>.ts`, `src/services/<plural>.service.ts`,
+`src/hooks/use<Plural>.ts` y `src/app/<plural>/page.tsx` — una página cliente
+con listado, alta, edición y borrado (formulario + tabla), siguiendo el
+mismo estilo visual que `src/app/users/page.tsx`.
+
+Al final, el script ejecuta `biome check --write` sobre todos los archivos
+tocados para dejarlos formateados según las reglas del proyecto.
+
+### Limitaciones a tener en cuenta
+
+- La pluralización es una heurística simple (reglas en inglés); para
+  palabras irregulares (`person` → `persons` en vez de `people`) tendrás que
+  renombrar la carpeta/tabla a mano después de generar el módulo.
+- El generador no borra ni sobreescribe un módulo existente — si necesitas
+  regenerarlo, borra los archivos manualmente primero.
+- Los campos `unique` disparan una comprobación de conflicto básica
+  (`findBy<Campo>` antes de crear/actualizar); para reglas de negocio más
+  complejas, edita `service.ts` después de generar.
+
+## 8. Convenciones rápidas
 
 - **SQLite ↔ TS:** `deleted` se guarda como `0/1`; usa `mapDeleted` al leer.
   Nunca borres físicamente, usa `softDelete`.
