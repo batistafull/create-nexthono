@@ -555,6 +555,19 @@ pnpm nexthono-module
 
 ### Flujo interactivo
 
+0. **Tipo de módulo**:
+
+   ```
+   ¿Qué tipo de módulo quieres crear?
+     1) CRUD completo (backend + base de datos + frontend)
+     2) Página vacía / en construcción (sin base de datos)
+   ```
+
+   Elegir **2)** salta directo a la sección
+   [«Página vacía (en construcción)»](#página-vacía-en-construcción) más
+   abajo — no hay campos, backend ni migración. El resto de esta lista
+   describe el flujo de **1) CRUD completo**.
+
 1. **Nombre del módulo, en singular** (ej: `product`). El plural (para la
    tabla, las rutas y las carpetas) se deriva automáticamente con reglas
    simples de pluralización en inglés (`product` → `products`, `category` →
@@ -608,6 +621,25 @@ mismo estilo visual que `src/app/users/page.tsx`.
 
 Al final, el script ejecuta `biome check --write` sobre todos los archivos
 tocados para dejarlos formateados según las reglas del proyecto.
+
+### Página vacía (en construcción)
+
+Al elegir **2)** en el primer paso, el flujo es distinto y mucho más corto:
+
+1. Pide un **nombre de página** (ej: `reports`, `settings` — no tiene que
+   ser singular, se usa tal cual para la ruta). Si `src/app/<nombre>/` ya
+   existe, se detiene sin tocar nada.
+2. Genera **un solo archivo**: `src/app/<nombre>/page.tsx`, un componente
+   cliente centrado con un ícono y el texto "En construcción" — sin backend,
+   sin migración, sin tipo, servicio ni hook, y sin registrar nada en
+   `server/api/index.ts`.
+
+No pide campos, no pregunta por `db:migrate` (no hay nada que migrar) y no
+requiere sesión iniciada (a diferencia de las páginas CRUD, no llama a
+`useAuth`). Es un punto de partida para una página que vas a construir a
+mano — o para reservar la ruta mientras decides si necesita datos. Como no
+crea un `repository.ts`, este tipo de módulo **no aparece** en la lista de
+`nexthono-field` (sección 8) hasta que le agregues un módulo CRUD real.
 
 ### Limitaciones a tener en cuenta
 

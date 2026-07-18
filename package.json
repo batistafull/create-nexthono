@@ -1,6 +1,6 @@
 {
   "name": "create-nexthono",
-  "version": "0.4.0",
+  "version": "1.1.0",
   "description": "Scaffold a Next.js (App Router) + Hono full-stack starter with SQLite, JWT auth and a seeded admin user.",
   "type": "module",
   "bin": {

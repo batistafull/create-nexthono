@@ -15,6 +15,7 @@ import {
   type ModuleNames,
   SQL_TYPE,
   TS_TYPE,
+  askMenu,
   askYesNo,
   c,
   detectPackageManager,
@@ -30,7 +31,6 @@ import {
   runMigration,
   tableCellExpr,
   toCamel,
-  toLabel,
   toPascal,
   toSnake,
   updateAssignExpr,
@@ -56,9 +56,9 @@ const SRC_SERVICES_DIR = join(projectRoot, "src", "services");
 const SRC_HOOKS_DIR = join(projectRoot, "src", "hooks");
 const SRC_APP_DIR = join(projectRoot, "src", "app");
 
-async function promptModuleName(rl: Interface): Promise<string> {
+async function promptName(rl: Interface, question: string): Promise<string> {
   for (;;) {
-    const raw = await rl.question("Nombre del módulo, en singular (ej: product): ");
+    const raw = await rl.question(question);
     const snake = toSnake(raw.trim());
     if (!snake || !IDENTIFIER_RE.test(snake)) {
       log(
@@ -764,6 +764,22 @@ ${tdLines}
 `;
 }
 
+/** A page with no backend/database — just a centered "under construction" placeholder. */
+function genBlankPageTsx(Pascal: string): string {
+  return `import { Construction } from "lucide-react";
+
+export default function ${Pascal}Page() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+      <Construction size={40} className="text-[var(--muted-foreground)]" />
+      <h1 className="text-xl font-semibold">En construcción</h1>
+      <p className="text-sm text-[var(--muted-foreground)]">Esta página todavía no está lista.</p>
+    </main>
+  );
+}
+`;
+}
+
 // ---------------------------------------------------------------------------
 // File system helpers
 // ---------------------------------------------------------------------------
@@ -817,12 +833,58 @@ function printBanner() {
   log("");
 }
 
+/** A page with no backend/database: just `src/app/<name>/page.tsx`. */
+async function runBlankPageFlow(rl: Interface) {
+  const pageName = await promptName(rl, "Nombre de la página (ej: reports, settings): ");
+  const pageDir = join(SRC_APP_DIR, pageName);
+  if (existsSync(pageDir)) {
+    log(`${c.red}✖ La página "${pageName}" ya existe.${c.reset}`);
+    rl.close();
+    process.exitCode = 1;
+    return;
+  }
+  rl.close();
+
+  log(`\n${c.dim}Generando página "${pageName}"…${c.reset}`);
+
+  const created: string[] = [];
+  try {
+    writeGenerated(join(pageDir, "page.tsx"), genBlankPageTsx(toPascal(pageName)), created);
+    formatWithBiome(projectRoot, created);
+  } catch (err) {
+    log(`${c.red}✖ Falló la generación: ${err instanceof Error ? err.message : err}${c.reset}`);
+    for (const path of created) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // best effort cleanup
+      }
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  log(`${c.green}✔ Página "${pageName}" creada.${c.reset}`);
+  log(`\n${c.bold}${c.green}Listo!${c.reset} Reinicia ${c.cyan}dev${c.reset} si estaba corriendo.`);
+  log(`  Visita ${c.cyan}/${pageName}${c.reset} para verla.\n`);
+}
+
 async function main() {
   printBanner();
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  const singularSnake = await promptModuleName(rl);
+  const moduleType = await askMenu(rl, "¿Qué tipo de módulo quieres crear?", [
+    "CRUD completo (backend + base de datos + frontend)",
+    "Página vacía / en construcción (sin base de datos)",
+  ]);
+
+  if (moduleType === 2) {
+    await runBlankPageFlow(rl);
+    return;
+  }
+
+  const singularSnake = await promptName(rl, "\nNombre del módulo, en singular (ej: product): ");
   const table = pluralizeSnake(singularSnake);
   const names: ModuleNames = {
     table,
