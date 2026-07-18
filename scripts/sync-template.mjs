@@ -25,11 +25,12 @@ const EXCLUDES = new Set([
   ".claude"
 ]);
 
-// Files renamed so npm won't strip/interpret them when the package is published.
+// Files/dirs renamed so npm won't strip/interpret them when the package is published.
 const RENAMES = [
   [".gitignore", "_gitignore"],
   [".env", "_env"],
   [".env.example", "_env.example"],
+  [".nexthono", "_nexthono"],
 ];
 
 async function exists(p) {

@@ -1,8 +1,41 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { createInterface, type Interface } from "node:readline/promises";
+import { type Interface, createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import {
+  type FieldDef,
+  IDENTIFIER_RE,
+  type ModuleNames,
+  SQL_TYPE,
+  TS_TYPE,
+  askYesNo,
+  c,
+  detectPackageManager,
+  editPopulateExpr,
+  formInputJsx,
+  formatWithBiome,
+  insertValueExpr,
+  log,
+  nextMigrationPrefix,
+  payloadFieldExpr,
+  pluralizeSnake,
+  promptFieldCore,
+  runMigration,
+  tableCellExpr,
+  toCamel,
+  toLabel,
+  toPascal,
+  toSnake,
+  updateAssignExpr,
+  zodExpr,
+} from "./lib/shared";
 
 /**
  * Interactive scaffolder for a full backend + frontend CRUD module, following
@@ -23,151 +56,14 @@ const SRC_SERVICES_DIR = join(projectRoot, "src", "services");
 const SRC_HOOKS_DIR = join(projectRoot, "src", "hooks");
 const SRC_APP_DIR = join(projectRoot, "src", "app");
 
-const BASE_FIELD_NAMES = new Set([
-  "id",
-  "date_entered",
-  "date_modified",
-  "create_by",
-  "modified_by",
-  "deleted",
-]);
-
-const c = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  green: "\x1b[32m",
-  cyan: "\x1b[36m",
-  yellow: "\x1b[33m",
-  red: "\x1b[31m",
-};
-
-function log(msg = "") {
-  console.log(msg);
-}
-
-// ---------------------------------------------------------------------------
-// Case helpers
-// ---------------------------------------------------------------------------
-
-function toWords(input: string): string[] {
-  return input
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function capitalizeWord(word: string): string {
-  return word.charAt(0).toUpperCase() + word.slice(1);
-}
-
-function toSnake(input: string): string {
-  return toWords(input).join("_");
-}
-
-function toPascal(input: string): string {
-  return toWords(input).map(capitalizeWord).join("");
-}
-
-function toCamel(input: string): string {
-  const words = toWords(input);
-  if (words.length === 0) return "";
-  return [words[0], ...words.slice(1).map(capitalizeWord)].join("");
-}
-
-function toLabel(input: string): string {
-  return toWords(input).map(capitalizeWord).join(" ");
-}
-
-function pluralizeWord(word: string): string {
-  if (/(s|x|z|ch|sh)$/i.test(word)) return `${word}es`;
-  if (/[^aeiou]y$/i.test(word)) return `${word.slice(0, -1)}ies`;
-  return `${word}s`;
-}
-
-function pluralizeSnake(snake: string): string {
-  const words = snake.split("_");
-  words[words.length - 1] = pluralizeWord(words[words.length - 1]);
-  return words.join("_");
-}
-
-const IDENTIFIER_RE = /^[a-z][a-z0-9_]*$/;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type FieldType = "string" | "integer" | "decimal" | "boolean" | "date";
-
-const FIELD_TYPES: readonly FieldType[] = ["string", "integer", "decimal", "boolean", "date"];
-
-const TS_TYPE: Record<FieldType, string> = {
-  string: "string",
-  integer: "number",
-  decimal: "number",
-  boolean: "boolean",
-  date: "string",
-};
-
-const SQL_TYPE: Record<FieldType, string> = {
-  string: "TEXT",
-  integer: "INTEGER",
-  decimal: "REAL",
-  boolean: "INTEGER",
-  date: "TEXT",
-};
-
-interface FieldDef {
-  name: string;
-  label: string;
-  type: FieldType;
-  length?: number;
-  required: boolean;
-  unique: boolean;
-}
-
-interface ModuleNames {
-  table: string; // snake_case plural — also the frontend route segment
-  singularSnake: string;
-  Pascal: string; // Product
-  PascalPlural: string; // Products
-  camelSingular: string; // product
-  camelPlural: string; // products
-}
-
-// ---------------------------------------------------------------------------
-// Prompts
-// ---------------------------------------------------------------------------
-
-async function ask(rl: Interface, question: string): Promise<string> {
-  return (await rl.question(question)).trim();
-}
-
-async function askMenu(rl: Interface, question: string, options: string[]): Promise<number> {
-  log(question);
-  for (const [i, opt] of options.entries()) log(`  ${i + 1}) ${opt}`);
-  for (;;) {
-    const raw = await ask(rl, `${c.cyan}>${c.reset} `);
-    const n = Number.parseInt(raw, 10);
-    if (Number.isInteger(n) && n >= 1 && n <= options.length) return n;
-    log(`${c.red}Opción inválida. Elige un número entre 1 y ${options.length}.${c.reset}`);
-  }
-}
-
-async function askYesNo(rl: Interface, question: string): Promise<boolean> {
-  const choice = await askMenu(rl, question, ["Sí", "No"]);
-  return choice === 1;
-}
-
 async function promptModuleName(rl: Interface): Promise<string> {
   for (;;) {
-    const raw = await ask(rl, "Nombre del módulo, en singular (ej: product): ");
-    const snake = toSnake(raw);
+    const raw = await rl.question("Nombre del módulo, en singular (ej: product): ");
+    const snake = toSnake(raw.trim());
     if (!snake || !IDENTIFIER_RE.test(snake)) {
-      log(`${c.red}Nombre inválido. Usa letras, números y guiones (debe empezar con una letra).${c.reset}`);
+      log(
+        `${c.red}Nombre inválido. Usa letras, números y guiones (debe empezar con una letra).${c.reset}`,
+      );
       continue;
     }
     return snake;
@@ -175,47 +71,7 @@ async function promptModuleName(rl: Interface): Promise<string> {
 }
 
 async function promptField(rl: Interface, existing: Set<string>): Promise<FieldDef> {
-  let name: string | undefined;
-  while (!name) {
-    const raw = await ask(rl, "\nNombre del campo (ej: price): ");
-    const snake = toSnake(raw);
-    if (!snake || !IDENTIFIER_RE.test(snake)) {
-      log(`${c.red}Nombre inválido. Usa letras, números y guiones bajos (debe empezar con una letra).${c.reset}`);
-      continue;
-    }
-    if (BASE_FIELD_NAMES.has(snake)) {
-      log(`${c.red}"${snake}" ya es un campo base. Elige otro nombre.${c.reset}`);
-      continue;
-    }
-    if (existing.has(snake)) {
-      log(`${c.red}El campo "${snake}" ya fue agregado.${c.reset}`);
-      continue;
-    }
-    name = snake;
-  }
-
-  const typeChoice = await askMenu(rl, "\nTipo de dato:", [
-    "string (texto corto)",
-    "integer (número entero)",
-    "decimal (número decimal)",
-    "boolean (sí/no)",
-    "date (fecha)",
-  ]);
-  const type = FIELD_TYPES[typeChoice - 1];
-
-  let length: number | undefined;
-  if (type === "string") {
-    const raw = await ask(rl, "Longitud máxima (Enter para omitir): ");
-    if (raw) {
-      const n = Number.parseInt(raw, 10);
-      if (Number.isInteger(n) && n > 0) length = n;
-    }
-  }
-
-  const required = await askYesNo(rl, "\n¿Es requerido?");
-  const unique = await askYesNo(rl, "\n¿Debe ser único (unique key)?");
-
-  return { name, label: toLabel(name), type, length, required, unique };
+  return promptFieldCore(rl, existing);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,30 +103,6 @@ export type Update${n.Pascal}Input = Partial<Create${n.Pascal}Input>;
 `;
 }
 
-function zodExpr(f: FieldDef, forUpdate: boolean): string {
-  let base: string;
-  switch (f.type) {
-    case "string":
-      base = f.required ? `z.string().min(1, "${f.label} is required")` : "z.string()";
-      if (f.length) base += `.max(${f.length})`;
-      break;
-    case "integer":
-      base = "z.number().int()";
-      break;
-    case "decimal":
-      base = "z.number()";
-      break;
-    case "boolean":
-      base = "z.boolean()";
-      break;
-    case "date":
-      base = f.required ? `z.string().min(1, "${f.label} is required")` : "z.string()";
-      break;
-  }
-  if (forUpdate || !f.required) base += ".optional()";
-  return base;
-}
-
 function genSchemaTs(n: ModuleNames, fields: FieldDef[]): string {
   const createLines = fields.map((f) => `  ${f.name}: ${zodExpr(f, false)},`).join("\n");
   const updateLines = fields.map((f) => `  ${f.name}: ${zodExpr(f, true)},`).join("\n");
@@ -296,19 +128,6 @@ export const ${n.camelSingular}IdParamSchema = z.object({
 `;
 }
 
-function insertValueExpr(f: FieldDef): string {
-  if (f.type === "boolean") {
-    return f.required
-      ? `data.${f.name} ? 1 : 0`
-      : `data.${f.name} === undefined ? null : data.${f.name} ? 1 : 0`;
-  }
-  return f.required ? `data.${f.name}` : `data.${f.name} ?? null`;
-}
-
-function updateAssignExpr(f: FieldDef): string {
-  return f.type === "boolean" ? `data.${f.name} ? 1 : 0` : `data.${f.name}`;
-}
-
 function genRepositoryTs(n: ModuleNames, fields: FieldDef[]): string {
   const booleanFields = fields.filter((f) => f.type === "boolean");
   const uniqueFields = fields.filter((f) => f.unique);
@@ -317,7 +136,9 @@ function genRepositoryTs(n: ModuleNames, fields: FieldDef[]): string {
     .map((k) => `"${k}"`)
     .join(" | ");
   const rawExtra = ["deleted: number", ...booleanFields.map((f) => `${f.name}: number`)].join("; ");
-  const mapRowBooleanLines = booleanFields.map((f) => `    ${f.name}: Boolean(row.${f.name}),`).join("\n");
+  const mapRowBooleanLines = booleanFields
+    .map((f) => `    ${f.name}: Boolean(row.${f.name}),`)
+    .join("\n");
 
   const insertCols = [
     "id",
@@ -742,52 +563,6 @@ export function use${n.PascalPlural}() {
 `;
 }
 
-function payloadFieldExpr(f: FieldDef): string {
-  if (f.type === "integer" || f.type === "decimal") {
-    return f.required
-      ? `Number(form.${f.name})`
-      : `form.${f.name} === "" ? undefined : Number(form.${f.name})`;
-  }
-  if (f.type === "boolean") return `Boolean(form.${f.name})`;
-  return f.required
-    ? `String(form.${f.name})`
-    : `form.${f.name} === "" ? undefined : String(form.${f.name})`;
-}
-
-function editPopulateExpr(f: FieldDef): string {
-  if (f.type === "boolean") return `Boolean(item.${f.name})`;
-  return `item.${f.name} == null ? "" : String(item.${f.name})`;
-}
-
-function formInputJsx(f: FieldDef): string {
-  if (f.type === "boolean") {
-    return `          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={Boolean(form.${f.name})}
-              onChange={(e) => setForm((prev) => ({ ...prev, ${f.name}: e.target.checked }))}
-            />
-            ${f.label}
-          </label>`;
-  }
-  const inputType = f.type === "date" ? "date" : f.type === "integer" || f.type === "decimal" ? "number" : "text";
-  const stepAttr = f.type === "decimal" ? '\n              step="any"' : "";
-  return `          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-[var(--muted-foreground)]">${f.label}${f.required ? " *" : ""}</span>
-            <input
-              type="${inputType}"${stepAttr}
-              required={${f.required}}
-              value={String(form.${f.name} ?? "")}
-              onChange={(e) => setForm((prev) => ({ ...prev, ${f.name}: e.target.value }))}
-              className="rounded-md border border-[var(--border)] bg-transparent px-3 py-2"
-            />
-          </label>`;
-}
-
-function tableCellExpr(f: FieldDef): string {
-  return f.type === "boolean" ? `item.${f.name} ? "Sí" : "No"` : `item.${f.name} ?? "—"`;
-}
-
 function genFrontendPageTsx(n: ModuleNames, fields: FieldDef[]): string {
   const formStateLines = fields
     .map((f) => `  ${f.name}: ${f.type === "boolean" ? "boolean" : "string"};`)
@@ -795,9 +570,13 @@ function genFrontendPageTsx(n: ModuleNames, fields: FieldDef[]): string {
   const emptyFormLines = fields
     .map((f) => `  ${f.name}: ${f.type === "boolean" ? "false" : '""'},`)
     .join("\n");
-  const editPopulateLines = fields.map((f) => `      ${f.name}: ${editPopulateExpr(f)},`).join("\n");
+  const editPopulateLines = fields
+    .map((f) => `      ${f.name}: ${editPopulateExpr(f)},`)
+    .join("\n");
   const payloadLines = fields.map((f) => `        ${f.name}: ${payloadFieldExpr(f)},`).join("\n");
-  const thLines = fields.map((f) => `                <th className="px-4 py-2 font-medium">${f.label}</th>`).join("\n");
+  const thLines = fields
+    .map((f) => `                <th className="px-4 py-2 font-medium">${f.label}</th>`)
+    .join("\n");
   const tdLines = fields
     .map((f) => `                  <td className="px-4 py-2">{${tableCellExpr(f)}}</td>`)
     .join("\n");
@@ -995,16 +774,6 @@ function writeGenerated(path: string, content: string, created: string[]) {
   created.push(path);
 }
 
-function nextMigrationPrefix(): string {
-  const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql"));
-  let max = 0;
-  for (const f of files) {
-    const m = f.match(/^(\d+)_/);
-    if (m) max = Math.max(max, Number.parseInt(m[1], 10));
-  }
-  return String(max + 1).padStart(3, "0");
-}
-
 function registerRoute(n: ModuleNames): boolean {
   const content = readFileSync(INDEX_TS, "utf8");
   const importLine = `import { ${n.camelPlural}Routes } from "./v1/${n.table}/routes";`;
@@ -1036,44 +805,15 @@ function registerRoute(n: ModuleNames): boolean {
   return true;
 }
 
-function formatWithBiome(paths: string[]) {
-  if (paths.length === 0) return;
-  const onWindows = process.platform === "win32";
-  const cmd = "npx";
-  const args = ["--yes", "biome", "check", "--write", ...paths];
-  if (onWindows) {
-    const line = [cmd, ...args].map((a) => (/[\s"]/.test(a) ? `"${a}"` : a)).join(" ");
-    spawnSync(line, { cwd: projectRoot, stdio: "ignore", shell: true });
-  } else {
-    spawnSync(cmd, args, { cwd: projectRoot, stdio: "ignore" });
-  }
-}
-
-function detectPackageManager(): "npm" | "pnpm" | "yarn" | "bun" {
-  const ua = process.env.npm_config_user_agent ?? "";
-  if (ua.startsWith("pnpm")) return "pnpm";
-  if (ua.startsWith("yarn")) return "yarn";
-  if (ua.startsWith("bun")) return "bun";
-  return "npm";
-}
-
-function runMigration(pm: string): boolean {
-  const onWindows = process.platform === "win32";
-  const args = pm === "yarn" ? ["db:migrate"] : ["run", "db:migrate"];
-  if (onWindows) {
-    const line = [pm, ...args].join(" ");
-    return spawnSync(line, { cwd: projectRoot, stdio: "inherit", shell: true }).status === 0;
-  }
-  return spawnSync(pm, args, { cwd: projectRoot, stdio: "inherit" }).status === 0;
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 function printBanner() {
   log("");
-  log(`${c.bold}${c.cyan}◆  nexthono-module${c.reset}${c.dim} — generador de módulos CRUD${c.reset}`);
+  log(
+    `${c.bold}${c.cyan}◆  nexthono-module${c.reset}${c.dim} — generador de módulos CRUD${c.reset}`,
+  );
   log("");
 }
 
@@ -1111,7 +851,9 @@ async function main() {
     const field = await promptField(rl, fieldNames);
     fieldNames.add(field.name);
     fields.push(field);
-    log(`${c.green}✔ Campo "${field.name}" (${field.type}${field.required ? ", requerido" : ""}${field.unique ? ", único" : ""}) agregado.${c.reset}`);
+    log(
+      `${c.green}✔ Campo "${field.name}" (${field.type}${field.required ? ", requerido" : ""}${field.unique ? ", único" : ""}) agregado.${c.reset}`,
+    );
   }
 
   rl.close();
@@ -1129,7 +871,8 @@ async function main() {
     writeGenerated(join(backendDir, "routes.ts"), genRoutesTs(names), created);
 
     // Migration
-    const prefix = nextMigrationPrefix();
+    const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql"));
+    const prefix = nextMigrationPrefix(migrationFiles);
     const migrationPath = join(MIGRATIONS_DIR, `${prefix}_${table}.sql`);
     writeGenerated(migrationPath, genMigrationSql(prefix, names, fields), created);
 
@@ -1137,22 +880,28 @@ async function main() {
     registerRoute(names);
 
     // Frontend
-    writeGenerated(join(SRC_TYPES_DIR, `${singularSnake}.ts`), genFrontendTypeTs(names, fields), created);
+    writeGenerated(
+      join(SRC_TYPES_DIR, `${singularSnake}.ts`),
+      genFrontendTypeTs(names, fields),
+      created,
+    );
     writeGenerated(
       join(SRC_SERVICES_DIR, `${table}.service.ts`),
       genFrontendServiceTs(names, fields),
       created,
     );
-    writeGenerated(join(SRC_HOOKS_DIR, `use${names.PascalPlural}.ts`), genFrontendHookTs(names), created);
     writeGenerated(
-      join(frontendPageDir, "page.tsx"),
-      genFrontendPageTsx(names, fields),
+      join(SRC_HOOKS_DIR, `use${names.PascalPlural}.ts`),
+      genFrontendHookTs(names),
       created,
     );
+    writeGenerated(join(frontendPageDir, "page.tsx"), genFrontendPageTsx(names, fields), created);
 
-    log(`${c.green}✔ ${created.length} archivo(s) creado(s), migración ${prefix}_${table}.sql generada.${c.reset}`);
+    log(
+      `${c.green}✔ ${created.length} archivo(s) creado(s), migración ${prefix}_${table}.sql generada.${c.reset}`,
+    );
 
-    formatWithBiome([...created, INDEX_TS]);
+    formatWithBiome(projectRoot, [...created, INDEX_TS]);
   } catch (err) {
     log(`${c.red}✖ Falló la generación: ${err instanceof Error ? err.message : err}${c.reset}`);
     for (const path of created) {
@@ -1173,7 +922,7 @@ async function main() {
   if (runNow) {
     const pm = detectPackageManager();
     log(`\n${c.dim}Ejecutando ${pm} run db:migrate…${c.reset}`);
-    const ok = runMigration(pm);
+    const ok = runMigration(projectRoot, pm);
     log(
       ok
         ? `${c.green}✔ Migración aplicada.${c.reset}`

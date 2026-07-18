@@ -14,8 +14,10 @@ las páginas/servicios de usuarios (frontend) son la referencia canónica: cópi
 
 ```
 template/
-├── scripts/
-│   └── create-module.ts        # Generador CRUD interactivo (pnpm nexthono-module, ver §7)
+├── .nexthono/                   # Herramientas del proyecto, separadas del código de la app
+│   ├── create-module.ts        # Generador CRUD interactivo (pnpm nexthono-module, ver §7)
+│   ├── add-field.ts            # Agrega campos a un módulo existente (pnpm nexthono-field, ver §8)
+│   └── lib/shared.ts           # Helpers compartidos por ambos scripts
 ├── server/api/                 # Backend Hono (una sola app, montada en /api)
 │   ├── index.ts                # App raíz: middlewares globales + montaje de v1
 │   ├── types.ts                # AppEnv (variables de contexto: user, jwtPayload)
@@ -533,6 +535,7 @@ pnpm db:migrate       # Migraciones
 pnpm db:seed          # Seeds
 pnpm db:reset         # Reset completo de la BD
 pnpm nexthono-module  # Generador interactivo de módulos CRUD (ver sección 7)
+pnpm nexthono-field   # Agrega campos a un módulo existente (ver sección 8)
 ```
 
 ## 7. Generador de módulos (`pnpm nexthono-module`)
@@ -540,7 +543,10 @@ pnpm nexthono-module  # Generador interactivo de módulos CRUD (ver sección 7)
 Automatiza todo el checklist de las secciones 2–4: crea el módulo backend
 completo, el módulo frontend completo y su migración, siguiendo exactamente
 los mismos patrones que `users`. El script vive en
-[scripts/create-module.ts](scripts/create-module.ts).
+[.nexthono/create-module.ts](.nexthono/create-module.ts), en una carpeta
+oculta separada de `server/` y `src/` (mismo trato que `.gitignore` o `.env`:
+se publica como `_nexthono/` dentro del paquete npm y se renombra a
+`.nexthono/` al crear el proyecto).
 
 ```bash
 pnpm nexthono-module
@@ -614,7 +620,78 @@ tocados para dejarlos formateados según las reglas del proyecto.
   (`findBy<Campo>` antes de crear/actualizar); para reglas de negocio más
   complejas, edita `service.ts` después de generar.
 
-## 8. Convenciones rápidas
+## 8. Agregar campos a un módulo existente (`pnpm nexthono-field`)
+
+Complemento de `nexthono-module`: en vez de crear un módulo nuevo, agrega uno
+o más campos a un módulo **ya existente**, editando in-place los mismos 7
+archivos que tocaría `nexthono-module` (backend + frontend) en lugar de
+regenerarlos, para no perder cambios manuales que hayas hecho después de
+generarlos. El script vive en
+[.nexthono/add-field.ts](.nexthono/add-field.ts) y comparte helpers con
+`create-module.ts` en [.nexthono/lib/shared.ts](.nexthono/lib/shared.ts).
+
+```bash
+pnpm nexthono-field
+```
+
+### Flujo interactivo
+
+1. **Lista de módulos existentes**, numerada — elige uno. Solo aparecen los
+   módulos creados por `nexthono-module` (se detectan por tener un
+   `repository.ts` con el helper `mapRow`). El módulo `users` **no aparece**:
+   su `repository.ts` es a medida (hash de password, etc.) y no sigue el
+   patrón genérico, así que no es seguro parchearlo automáticamente — agrega
+   campos ahí a mano.
+2. **Campos adicionales**, el mismo bucle y las mismas preguntas que
+   `nexthono-module` (nombre, tipo, longitud, requerido, único — ver sección
+   7). Si respondes **Sí** a "¿Es requerido?" en un campo que no es
+   `boolean`, se pregunta además un **valor por defecto para las filas
+   existentes**: SQLite exige un `DEFAULT` al agregar una columna `NOT NULL`
+   con `ALTER TABLE` a una tabla que puede tener filas. Si además marcaste el
+   campo como único y la tabla ya tiene más de una fila, el script te avisa
+   que ese valor repetido hará fallar el índice único — tendrás que editar
+   la migración generada para hacer un backfill con valores distintos por
+   fila (ver ejemplo abajo) antes de correrla.
+3. El ciclo se repite hasta responder **No**. Al terminar, parchea todos los
+   archivos y pregunta si quieres correr `db:migrate` de inmediato.
+
+### Qué modifica
+
+- **Backend**: `types.ts`, `schema.ts`, `repository.ts` y (solo si algún
+  campo nuevo es único) `service.ts`.
+- **Frontend**: `src/types/<singular>.ts`, `src/services/<plural>.service.ts`
+  y `src/app/<plural>/page.tsx` (agrega el campo al formulario, a la tabla y
+  al estado). El hook `use<Plural>.ts` no necesita cambios (es genérico).
+- **Migración nueva**: `server/api/database/migrations/<NNN>_add_<campo>_to_<plural>.sql`
+  (o `..._add_fields_to_<plural>.sql` si agregaste varios a la vez), con un
+  `ALTER TABLE ... ADD COLUMN` por campo y los `CREATE UNIQUE INDEX`
+  correspondientes — **nunca** edita una migración anterior.
+- `controller.ts` y `routes.ts` no cambian (son genéricos, no dependen de los
+  campos del dominio).
+
+Todo-o-nada: si algún archivo no coincide con el patrón esperado (porque lo
+editaste a mano de una forma que el parcheador no reconoce), **no se escribe
+ningún archivo** y el script te pide agregar el campo manualmente. Al final,
+igual que `nexthono-module`, corre `biome check --write` sobre los archivos
+tocados.
+
+### Ejemplo: backfill de un campo único y requerido
+
+Si agregaste `sku` (string, requerido, único, default `'SKU-DEFAULT'`) a una
+tabla `products` que ya tiene filas, la migración generada falla porque todas
+las filas existentes reciben el mismo `sku`. Antes de correrla, edítala para
+darle un valor distinto a cada fila:
+
+```sql
+ALTER TABLE products ADD COLUMN sku TEXT NOT NULL DEFAULT 'SKU-DEFAULT';
+UPDATE products SET sku = 'SKU-' || id WHERE sku = 'SKU-DEFAULT';
+ALTER TABLE products ADD COLUMN stock INTEGER NOT NULL DEFAULT 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku_active
+  ON products (sku) WHERE deleted = 0;
+```
+
+## 9. Convenciones rápidas
 
 - **SQLite ↔ TS:** `deleted` se guarda como `0/1`; usa `mapDeleted` al leer.
   Nunca borres físicamente, usa `softDelete`.
