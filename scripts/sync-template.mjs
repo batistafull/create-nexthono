@@ -32,6 +32,7 @@ const EXCLUDES = new Set([
 // Files/dirs renamed so npm won't strip/interpret them when the package is published.
 const RENAMES = [
   [".gitignore", "_gitignore"],
+  [".npmrc", "_npmrc"],
   [".dev.vars.example", "_dev.vars.example"],
   [".nexthono", "_nexthono"],
 ];

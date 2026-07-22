@@ -15,9 +15,9 @@
     "format": "biome format --write .",
     "db:migrate": "wrangler d1 migrations apply nexthono --local",
     "db:migrate:remote": "wrangler d1 migrations apply nexthono --remote",
-    "db:seed": "tsx server/api/database/seeds.ts",
-    "db:seed:remote": "tsx server/api/database/seeds.ts --remote",
-    "db:reset": "wrangler d1 execute nexthono --local --command \"DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS d1_migrations;\" && wrangler d1 migrations apply nexthono --local && tsx server/api/database/seeds.ts",
+    "db:seed": "tsx server/api/database/seeds.ts && wrangler d1 execute nexthono --local --file server/api/database/.seed.sql -y",
+    "db:seed:remote": "tsx server/api/database/seeds.ts && wrangler d1 execute nexthono --remote --file server/api/database/.seed.sql -y",
+    "db:reset": "wrangler d1 execute nexthono --local --command \"DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS d1_migrations;\" -y && wrangler d1 migrations apply nexthono --local && tsx server/api/database/seeds.ts && wrangler d1 execute nexthono --local --file server/api/database/.seed.sql -y",
     "nexthono-module": "tsx .nexthono/create-module.ts",
     "nexthono-field": "tsx .nexthono/add-field.ts"
   },
@@ -39,7 +39,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@cloudflare/workers-types": "^4.20241205.0",
+    "@cloudflare/workers-types": "^5.20260721.1",
     "@tailwindcss/postcss": "^4.0.6",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.13.4",
@@ -49,6 +49,6 @@
     "tailwindcss": "^4.0.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.86.0"
   }
 }

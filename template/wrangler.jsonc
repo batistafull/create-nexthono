@@ -5,8 +5,6 @@
   "compatibility_date": "2024-12-30",
   // Required by OpenNext so Next.js can use Node.js APIs on Workers.
   "compatibility_flags": ["nodejs_compat"],
-  // Keep the migrations where the project already had them.
-  "migrations_dir": "server/api/database/migrations",
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
@@ -16,7 +14,9 @@
       "binding": "DB",
       "database_name": "nexthono",
       // Replace with the id printed by `wrangler d1 create nexthono`.
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      // migrations_dir is a per-database field, not top-level.
+      "migrations_dir": "server/api/database/migrations"
     }
   ]
 }

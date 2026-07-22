@@ -19,6 +19,7 @@ const templateDir = join(__dirname, "template");
 // Files/dirs renamed in the published template must be restored on scaffold.
 const RENAMES = [
   ["_gitignore", ".gitignore"],
+  ["_npmrc", ".npmrc"],
   ["_dev.vars.example", ".dev.vars.example"],
   ["_nexthono", ".nexthono"],
 ];
@@ -162,8 +163,8 @@ function printBanner() {
   log(row("◆  create-nexthono", `${c.bold}${c.cyan}◆  create-nexthono${c.reset}`));
   log(
     row(
-      "Next.js · Hono · SQLite · JWT",
-      `${c.dim}Next.js · Hono · SQLite · JWT${c.reset}`,
+      "Next.js · Hono · Workers · D1",
+      `${c.dim}Next.js · Hono · Workers · D1${c.reset}`,
     ),
   );
   log(row("", ""));
