@@ -1,7 +1,8 @@
 import { app } from "@server/api/index";
 import { handle } from "hono/vercel";
 
-// better-sqlite3 is a native addon; force the Node.js runtime.
+// OpenNext runs Next.js in the Node.js runtime on Workers (nodejs_compat),
+// which is where the D1 binding and Hono handlers execute.
 export const runtime = "nodejs";
 
 export const GET = handle(app);

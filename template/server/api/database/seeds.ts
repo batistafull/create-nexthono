@@ -1,44 +1,56 @@
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import bcrypt from "bcryptjs";
-import "../lib/env";
-import { newBaseFields } from "./base";
-import { db } from "./client";
 
 /**
- * Seeds baseline data. Idempotent: running it twice will not duplicate rows.
- *   pnpm db:seed
+ * Seeds baseline data into D1 by generating SQL and piping it through
+ * `wrangler d1 execute`. Idempotent: INSERT OR IGNORE + the partial unique
+ * index on (email) WHERE deleted = 0 make a second run a no-op.
+ *
+ *   npm run db:seed            seed the local D1 (.wrangler/state)
+ *   npm run db:seed:remote     seed the deployed D1
  */
-async function seed() {
-  const email = "admin@nexthono.dev";
+const remote = process.argv.includes("--remote");
+const email = "admin@nexthono.dev";
 
-  const existing = db.prepare("SELECT id FROM users WHERE email = ? AND deleted = 0").get(email);
+const passwordHash = await bcrypt.hash("admin1234", 10);
+const now = new Date().toISOString();
+const id = randomUUID();
 
-  if (existing) {
-    console.log("✨ Seed skipped — admin user already exists.");
-    return;
-  }
+const sql = `INSERT OR IGNORE INTO users
+  (id, date_entered, date_modified, create_by, modified_by, deleted,
+   name, email, password_hash, role)
+VALUES
+  ('${id}', '${now}', '${now}', NULL, NULL, 0,
+   'Admin', '${email}', '${passwordHash}', 'admin');`;
 
-  const base = newBaseFields(null);
-  const passwordHash = await bcrypt.hash("admin1234", 10);
+// Write to a temp file so wrangler receives the SQL verbatim — no shell
+// escaping of the '$' / '/' characters bcrypt hashes contain.
+const file = join(tmpdir(), `nexthono-seed-${id}.sql`);
+writeFileSync(file, sql);
 
-  db.prepare(
-    `INSERT INTO users
-       (id, date_entered, date_modified, create_by, modified_by, deleted,
-        name, email, password_hash, role)
-     VALUES
-       (@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted,
-        @name, @email, @password_hash, @role)`,
-  ).run({
-    ...base,
-    name: "Admin",
-    email,
-    password_hash: passwordHash,
-    role: "admin",
-  });
+const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+const result = spawnSync(
+  npx,
+  [
+    "wrangler",
+    "d1",
+    "execute",
+    "nexthono",
+    remote ? "--remote" : "--local",
+    "--file",
+    file,
+    "--yes",
+  ],
+  { stdio: "inherit" },
+);
+rmSync(file, { force: true });
 
-  console.log(`✅ Seeded admin user (${email} / admin1234)`);
-}
-
-seed().catch((err) => {
-  console.error("❌ Seed failed:", err);
+if (result.status !== 0) {
+  console.error("❌ Seed failed.");
   process.exit(1);
-});
+}
+console.log(`✅ Seeded admin user (${email} / admin1234)`);

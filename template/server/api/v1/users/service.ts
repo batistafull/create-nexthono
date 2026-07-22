@@ -7,22 +7,23 @@ const SALT_ROUNDS = 10;
 
 /** Business logic for users. Returns public (hash-free) users to callers. */
 export const userService = {
-  list(): User[] {
-    return userRepository.findAll().map(toPublicUser);
+  async list(): Promise<User[]> {
+    const users = await userRepository.findAll();
+    return users.map(toPublicUser);
   },
 
-  getById(id: string): User {
-    const user = userRepository.findById(id);
+  async getById(id: string): Promise<User> {
+    const user = await userRepository.findById(id);
     if (!user) throw notFound("User not found");
     return toPublicUser(user);
   },
 
   async create(input: CreateUserInput, actorId: string | null = null): Promise<User> {
-    if (userRepository.findByEmail(input.email)) {
+    if (await userRepository.findByEmail(input.email)) {
       throw conflict("Email already in use");
     }
     const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
-    const created = userRepository.create(
+    const created = await userRepository.create(
       {
         name: input.name,
         email: input.email,
@@ -35,11 +36,11 @@ export const userService = {
   },
 
   async update(id: string, input: UpdateUserInput, actorId: string | null = null): Promise<User> {
-    const existing = userRepository.findById(id);
+    const existing = await userRepository.findById(id);
     if (!existing) throw notFound("User not found");
 
     if (input.email && input.email !== existing.email) {
-      const clash = userRepository.findByEmail(input.email);
+      const clash = await userRepository.findByEmail(input.email);
       if (clash && clash.id !== id) throw conflict("Email already in use");
     }
 
@@ -47,7 +48,7 @@ export const userService = {
       ? await bcrypt.hash(input.password, SALT_ROUNDS)
       : undefined;
 
-    const updated = userRepository.update(
+    const updated = await userRepository.update(
       id,
       {
         name: input.name,
@@ -60,8 +61,8 @@ export const userService = {
     return toPublicUser(updated!);
   },
 
-  remove(id: string, actorId: string | null = null): void {
-    const ok = userRepository.softDelete(id, actorId);
+  async remove(id: string, actorId: string | null = null): Promise<void> {
+    const ok = await userRepository.softDelete(id, actorId);
     if (!ok) throw notFound("User not found");
   },
 };

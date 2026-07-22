@@ -1,8 +1,8 @@
 # create-nexthono
 
 Scaffold a **Next.js (App Router) + Hono** full-stack TypeScript starter — layered
-by domain, with SQLite, JWT auth, Biome, Tailwind v4, Zustand, and a **seeded admin
-user** ready to log in.
+by domain, running on **Cloudflare Workers** with **D1**, JWT auth, Biome, Tailwind
+v4, Zustand, and a **seeded admin user** ready to log in.
 
 ## Usage
 
@@ -52,24 +52,25 @@ admin@nexthono.dev / admin1234
 
 - **Frontend**: Next.js App Router, TypeScript, Tailwind CSS v4, Zustand, Lucide.
 - **Backend**: Hono mounted at `/api/v1`, layered `routes → controller → service → repository`.
+- **Runtime**: Cloudflare Workers via OpenNext (`@opennextjs/cloudflare`).
 - **Auth**: JWT login / logout / register / me, role-based access.
-- **Database**: better-sqlite3 with migrations, seeds, and mandatory base fields
-  (`id`, `date_entered`, `date_modified`, `create_by`, `modified_by`, `deleted`) on every table.
+- **Database**: Cloudflare D1 (SQLite) with wrangler-native migrations, seeds, and
+  mandatory base fields (`id`, `date_entered`, `date_modified`, `create_by`,
+  `modified_by`, `deleted`) on every table.
+
+> The generated project runs against a **local D1** (miniflare) out of the box.
+> To deploy, create a remote D1 (`wrangler d1 create`), set its `database_id` in
+> `wrangler.jsonc`, run `pnpm cf-typegen`, then `pnpm deploy`. See the project's
+> own README for the full flow.
 
 ## Maintaining the template
 
 The `template/` folder is a copy of the reference project (with dotfiles renamed
-so npm publishes them: `.gitignore` → `_gitignore`, `.env` → `_env`, etc.).
-To regenerate it from the parent project:
+so npm publishes them: `.gitignore` → `_gitignore`, `.dev.vars.example` →
+`_dev.vars.example`). To regenerate it from the parent project:
 
 ```bash
 npm run sync
-```
-
-## Publishing
-
-```bash
-npm publish --access public
 ```
 
 ## License

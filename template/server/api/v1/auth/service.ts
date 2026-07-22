@@ -12,7 +12,7 @@ import type { AuthResult, LoginInput, RegisterInput } from "./types";
  */
 export const authService = {
   async login(input: LoginInput): Promise<AuthResult> {
-    const row = userRepository.findByEmail(input.email);
+    const row = await userRepository.findByEmail(input.email);
     // Same error whether the email is unknown or the password is wrong.
     if (!row) throw unauthorized("Invalid credentials");
 

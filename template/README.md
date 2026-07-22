@@ -1,7 +1,7 @@
 # Nexthono
 
 Full-stack TypeScript starter: **Next.js (App Router) + Hono**, organized by
-domain/feature, with SQLite (local) / D1 (remote) and JWT authentication.
+domain/feature, running on **Cloudflare Workers** with **D1** and JWT auth.
 
 ## Stack
 
@@ -9,7 +9,8 @@ domain/feature, with SQLite (local) / D1 (remote) and JWT authentication.
 | --------- | ------------------------------------------------------- |
 | Frontend  | Next.js, TypeScript, Tailwind CSS v4, Zustand, Lucide    |
 | Backend   | Hono (montado en `/api`), TypeScript, Zod               |
-| Database  | better-sqlite3 (local) · Cloudflare D1 (remote)         |
+| Database  | Cloudflare D1 (SQLite) · local vía wrangler/miniflare    |
+| Runtime   | Cloudflare Workers vía OpenNext (`@opennextjs/cloudflare`) |
 | Auth      | JWT (`hono/jwt`) + bcryptjs                             |
 | Linter    | Biome                                                   |
 
@@ -21,13 +22,13 @@ Frontend (src/)                      Backend (server/api/)
   hooks/ ─┐                            v1/
   store/  │                              auth/  routes→controller→service
   services/ ──HTTP──▶ /api/v1 ─────▶     users/ routes→controller→service→repository
-                                       database/ client · schema · migrations · seeds
+                                       database/ client · base · migrations · seeds
 ```
 
 Flujo de una petición:
 
 ```
-Request → Routes → Middleware → Controller → Service → Repository → SQLite
+Request → Routes → Middleware → Controller → Service → Repository → D1
 ```
 
 ### Reglas del proyecto
@@ -41,10 +42,18 @@ Request → Routes → Middleware → Controller → Service → Repository → 
 
 ```bash
 pnpm install
-pnpm db:migrate     # crea las tablas
-pnpm db:seed        # crea el usuario admin
-pnpm dev            # http://localhost:3000
+
+# Una sola vez: crea la D1 y pega el database_id en wrangler.jsonc
+npx wrangler d1 create nexthono
+pnpm cf-typegen               # genera worker-configuration.d.ts (tipa el binding)
+
+pnpm db:migrate               # aplica migraciones en la D1 local
+pnpm db:seed                  # crea el usuario admin
+pnpm dev                      # http://localhost:3000
 ```
+
+> Tras `cf-typegen`, borra `cloudflare-env.d.ts` (era un puente temporal; el
+> binding ya lo tipa `worker-configuration.d.ts`).
 
 ### Credenciales del seed
 
@@ -53,18 +62,31 @@ email:    admin@nexthono.dev
 password: admin1234
 ```
 
+## Despliegue
+
+```bash
+pnpm db:migrate:remote        # aplica migraciones en la D1 desplegada
+pnpm db:seed:remote           # (opcional) siembra el admin en remoto
+npx wrangler secret put JWT_SECRET
+pnpm deploy                   # build OpenNext + wrangler deploy
+```
+
 ## Scripts
 
-| Comando           | Descripción                                    |
-| ----------------- | ---------------------------------------------- |
-| `pnpm dev`        | Servidor de desarrollo Next.js                 |
-| `pnpm build`      | Build de producción                            |
-| `pnpm start`      | Sirve el build                                 |
-| `pnpm lint`       | Biome check                                    |
-| `pnpm lint:fix`   | Biome check con autofix                        |
-| `pnpm db:migrate` | Aplica migraciones (`--fresh` recrea todo)     |
-| `pnpm db:seed`    | Inserta datos base (idempotente)               |
-| `pnpm db:reset`   | Recrea la base de datos y vuelve a sembrar     |
+| Comando                  | Descripción                                     |
+| ------------------------ | ----------------------------------------------- |
+| `pnpm dev`               | Servidor de desarrollo Next.js                  |
+| `pnpm build`             | Build de producción (Next)                      |
+| `pnpm preview`           | Build OpenNext + preview en workerd local       |
+| `pnpm deploy`            | Build OpenNext + `wrangler deploy`              |
+| `pnpm cf-typegen`        | Genera los tipos del binding (`wrangler types`) |
+| `pnpm lint`              | Biome check                                     |
+| `pnpm lint:fix`          | Biome check con autofix                         |
+| `pnpm db:migrate`        | Aplica migraciones en la D1 local               |
+| `pnpm db:migrate:remote` | Aplica migraciones en la D1 desplegada          |
+| `pnpm db:seed`           | Inserta datos base local (idempotente)          |
+| `pnpm db:seed:remote`    | Inserta datos base en remoto                    |
+| `pnpm db:reset`          | Dropea tablas, re-migra y re-siembra (local)    |
 
 ## API
 
@@ -93,8 +115,11 @@ src/
 server/
 └── api/
     ├── index.ts             # app Hono
-    ├── database/            # client · base · schema · migrations · seeds
+    ├── database/            # client (D1) · base · migrations/ · seeds
     ├── middleware/          # auth · error
-    ├── lib/                 # jwt · http-error · env
+    ├── lib/                 # jwt · http-error
     └── v1/{auth,users}/     # routes · controller · service · repository · schema · types
+
+wrangler.jsonc               # Worker + binding D1
+open-next.config.ts          # adaptador OpenNext
 ```

@@ -5,13 +5,13 @@ import type { CreateUserInput, UpdateUserInput } from "./types";
 
 /** HTTP layer: reads validated input, calls the service, shapes the response. */
 export const usersController = {
-  list(c: Context<AppEnv>) {
-    return c.json({ data: userService.list() });
+  async list(c: Context<AppEnv>) {
+    return c.json({ data: await userService.list() });
   },
 
-  getById(c: Context<AppEnv>) {
+  async getById(c: Context<AppEnv>) {
     const { id } = c.req.param();
-    return c.json({ data: userService.getById(id) });
+    return c.json({ data: await userService.getById(id) });
   },
 
   async create(c: Context<AppEnv>) {
@@ -29,10 +29,10 @@ export const usersController = {
     return c.json({ data: user });
   },
 
-  remove(c: Context<AppEnv>) {
+  async remove(c: Context<AppEnv>) {
     const { id } = c.req.param();
     const actorId = c.get("user")?.id ?? null;
-    userService.remove(id, actorId);
+    await userService.remove(id, actorId);
     return c.body(null, 204);
   },
 };

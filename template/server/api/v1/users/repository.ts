@@ -1,10 +1,14 @@
 import { mapDeleted, newBaseFields, touchBaseFields } from "../../database/base";
-import { db } from "../../database/client";
+import { getDb } from "../../database/client";
 import type { UserRow } from "./types";
 
 /**
  * Data-access layer for users. The ONLY layer that talks to the database.
  * Soft deletes are respected everywhere (deleted = 0).
+ *
+ * D1 is asynchronous, so every method returns a Promise. Parameters are
+ * positional (`?`) — D1 does not support named (`@name`) binds — and writes
+ * use `RETURNING *` so we get the affected row without a second query.
  */
 
 type CreateUserData = {
@@ -24,92 +28,112 @@ type UpdateUserData = Partial<{
 /** A row as SQLite returns it: `deleted` is 0/1, not a boolean. */
 type RawUserRow = Omit<UserRow, "deleted"> & { deleted: number };
 
-function map(row: RawUserRow | undefined): UserRow | null {
+function map(row: RawUserRow | null | undefined): UserRow | null {
   return row ? mapDeleted(row) : null;
 }
 
 export const userRepository = {
-  findAll(): UserRow[] {
-    const rows = db
+  async findAll(): Promise<UserRow[]> {
+    const { results } = await getDb()
       .prepare("SELECT * FROM users WHERE deleted = 0 ORDER BY date_entered DESC")
-      .all() as RawUserRow[];
-    return rows.map((r) => mapDeleted(r));
+      .all<RawUserRow>();
+    return results.map((r) => mapDeleted(r));
   },
 
-  findById(id: string): UserRow | null {
-    const row = db.prepare("SELECT * FROM users WHERE id = ? AND deleted = 0").get(id) as
-      | RawUserRow
-      | undefined;
+  async findById(id: string): Promise<UserRow | null> {
+    const row = await getDb()
+      .prepare("SELECT * FROM users WHERE id = ? AND deleted = 0")
+      .bind(id)
+      .first<RawUserRow>();
     return map(row);
   },
 
-  findByEmail(email: string): UserRow | null {
-    const row = db.prepare("SELECT * FROM users WHERE email = ? AND deleted = 0").get(email) as
-      | RawUserRow
-      | undefined;
+  async findByEmail(email: string): Promise<UserRow | null> {
+    const row = await getDb()
+      .prepare("SELECT * FROM users WHERE email = ? AND deleted = 0")
+      .bind(email)
+      .first<RawUserRow>();
     return map(row);
   },
 
-  create(data: CreateUserData, actorId: string | null = null): UserRow {
+  async create(data: CreateUserData, actorId: string | null = null): Promise<UserRow> {
     const base = newBaseFields(actorId);
-    db.prepare(
-      `INSERT INTO users
-         (id, date_entered, date_modified, create_by, modified_by, deleted,
-          name, email, password_hash, role)
-       VALUES
-         (@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted,
-          @name, @email, @password_hash, @role)`,
-    ).run({
-      ...base,
-      name: data.name,
-      email: data.email,
-      password_hash: data.passwordHash,
-      role: data.role,
-    });
-    return this.findById(base.id)!;
+    const row = await getDb()
+      .prepare(
+        `INSERT INTO users
+           (id, date_entered, date_modified, create_by, modified_by, deleted,
+            name, email, password_hash, role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`,
+      )
+      .bind(
+        base.id,
+        base.date_entered,
+        base.date_modified,
+        base.create_by,
+        base.modified_by,
+        base.deleted,
+        data.name,
+        data.email,
+        data.passwordHash,
+        data.role,
+      )
+      .first<RawUserRow>();
+    // INSERT ... RETURNING always yields the inserted row.
+    return mapDeleted(row!);
   },
 
-  update(id: string, data: UpdateUserData, actorId: string | null = null): UserRow | null {
+  async update(
+    id: string,
+    data: UpdateUserData,
+    actorId: string | null = null,
+  ): Promise<UserRow | null> {
+    // Positional binds: the params array must follow the order of the `?` marks.
     const sets: string[] = [];
-    const params: Record<string, unknown> = { id };
+    const params: unknown[] = [];
 
     if (data.name !== undefined) {
-      sets.push("name = @name");
-      params.name = data.name;
+      sets.push("name = ?");
+      params.push(data.name);
     }
     if (data.email !== undefined) {
-      sets.push("email = @email");
-      params.email = data.email;
+      sets.push("email = ?");
+      params.push(data.email);
     }
     if (data.passwordHash !== undefined) {
-      sets.push("password_hash = @password_hash");
-      params.password_hash = data.passwordHash;
+      sets.push("password_hash = ?");
+      params.push(data.passwordHash);
     }
     if (data.role !== undefined) {
-      sets.push("role = @role");
-      params.role = data.role;
+      sets.push("role = ?");
+      params.push(data.role);
     }
 
     const touch = touchBaseFields(actorId);
-    sets.push("date_modified = @date_modified", "modified_by = @modified_by");
-    params.date_modified = touch.date_modified;
-    params.modified_by = touch.modified_by;
+    sets.push("date_modified = ?", "modified_by = ?");
+    params.push(touch.date_modified, touch.modified_by);
 
-    db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = @id AND deleted = 0`).run(params);
+    // Trailing param for the WHERE clause.
+    params.push(id);
 
-    return this.findById(id);
+    const row = await getDb()
+      .prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ? AND deleted = 0 RETURNING *`)
+      .bind(...params)
+      .first<RawUserRow>();
+    return map(row);
   },
 
   /** Soft delete. */
-  softDelete(id: string, actorId: string | null = null): boolean {
+  async softDelete(id: string, actorId: string | null = null): Promise<boolean> {
     const touch = touchBaseFields(actorId);
-    const result = db
+    const result = await getDb()
       .prepare(
         `UPDATE users
-           SET deleted = 1, date_modified = @date_modified, modified_by = @modified_by
-         WHERE id = @id AND deleted = 0`,
+           SET deleted = 1, date_modified = ?, modified_by = ?
+         WHERE id = ? AND deleted = 0`,
       )
-      .run({ id, ...touch });
-    return result.changes > 0;
+      .bind(touch.date_modified, touch.modified_by, id)
+      .run();
+    return result.meta.changes > 0;
   },
 };

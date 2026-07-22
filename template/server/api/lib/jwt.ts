@@ -1,7 +1,6 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { sign, verify } from "hono/jwt";
 import type { JWTPayload } from "hono/utils/jwt/types";
-
-const secret = process.env.JWT_SECRET ?? "dev-super-secret-change-me";
 
 /** Data we embed in the token. */
 export type AuthTokenPayload = JWTPayload & {
@@ -10,8 +9,24 @@ export type AuthTokenPayload = JWTPayload & {
   role: string;
 };
 
+const ALG = "HS256";
+const DEV_SECRET = "dev-super-secret-change-me";
+
+/**
+ * Secrets come from the Cloudflare binding (per request), NOT from module-scope
+ * `process.env` — bindings don't exist at import time on Workers. Set them in
+ * `.dev.vars` locally and with `wrangler secret put JWT_SECRET` in production.
+ */
+function env() {
+  return getCloudflareContext().env;
+}
+
+function getSecret(): string {
+  return env().JWT_SECRET ?? DEV_SECRET;
+}
+
 function expiresInSeconds(): number {
-  const raw = process.env.JWT_EXPIRES_IN ?? "7d";
+  const raw = env().JWT_EXPIRES_IN ?? "7d";
   const match = /^(\d+)([smhd])$/.exec(raw);
   if (!match) return 60 * 60 * 24 * 7;
   const value = Number(match[1]);
@@ -20,13 +35,11 @@ function expiresInSeconds(): number {
   return value * factor;
 }
 
-const ALG = "HS256";
-
 export async function signToken(payload: Omit<AuthTokenPayload, "exp" | "iat">): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return sign({ ...payload, iat: now, exp: now + expiresInSeconds() }, secret, ALG);
+  return sign({ ...payload, iat: now, exp: now + expiresInSeconds() }, getSecret(), ALG);
 }
 
 export async function verifyToken(token: string): Promise<AuthTokenPayload> {
-  return (await verify(token, secret, ALG)) as AuthTokenPayload;
+  return (await verify(token, getSecret(), ALG)) as AuthTokenPayload;
 }

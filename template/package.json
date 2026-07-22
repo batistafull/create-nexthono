@@ -7,18 +7,23 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "db:migrate": "tsx server/api/database/migrations.ts",
+    "db:migrate": "wrangler d1 migrations apply nexthono --local",
+    "db:migrate:remote": "wrangler d1 migrations apply nexthono --remote",
     "db:seed": "tsx server/api/database/seeds.ts",
-    "db:reset": "tsx server/api/database/migrations.ts --fresh && tsx server/api/database/seeds.ts"
+    "db:seed:remote": "tsx server/api/database/seeds.ts --remote",
+    "db:reset": "wrangler d1 execute nexthono --local --command \"DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS d1_migrations;\" && wrangler d1 migrations apply nexthono --local && tsx server/api/database/seeds.ts"
   },
   "dependencies": {
     "@batistafull/wytext": "latest",
     "@hono/zod-validator": "^0.4.3",
+    "@opennextjs/cloudflare": "^1.0.0",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^12.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hono": "^4.7.2",
@@ -32,15 +37,16 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@cloudflare/workers-types": "^4.20241205.0",
     "@tailwindcss/postcss": "^4.0.6",
     "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "postcss": "^8.5.2",
     "tailwindcss": "^4.0.6",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wrangler": "^3.99.0"
   }
 }

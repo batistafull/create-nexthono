@@ -19,8 +19,7 @@ const templateDir = join(__dirname, "template");
 // Files renamed in the published template must be restored on scaffold.
 const RENAMES = [
   ["_gitignore", ".gitignore"],
-  ["_env", ".env"],
-  ["_env.example", ".env.example"],
+  ["_dev.vars.example", ".dev.vars.example"],
 ];
 
 const c = {

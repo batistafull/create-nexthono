@@ -25,8 +25,8 @@ export const authController = {
     return c.json({ data: { success: true } });
   },
 
-  me(c: Context<AppEnv>) {
+  async me(c: Context<AppEnv>) {
     const user = c.get("user");
-    return c.json({ data: authService.me(user.id) });
+    return c.json({ data: await authService.me(user.id) });
   },
 };

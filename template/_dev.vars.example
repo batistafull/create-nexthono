@@ -1,0 +1,9 @@
+# Local Worker secrets, read via the Cloudflare binding (getCloudflareContext).
+# Copy this file to `.dev.vars` for local development. In production set the
+# same keys with:  wrangler secret put JWT_SECRET
+#
+# Without these, JWT signing falls back to a dev-only secret (fine locally,
+# NEVER in production).
+
+JWT_SECRET=dev-super-secret-change-me
+JWT_EXPIRES_IN=7d

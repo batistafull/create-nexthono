@@ -8,12 +8,16 @@
 /out/
 next-env.d.ts
 
+# cloudflare / opennext
+/.open-next/
+/.wrangler/
+.dev.vars
+
 # production
 /build
 
-# database (local sqlite)
-/data/*.db
-/data/*.db-*
+# cloudflare generated types
+worker-configuration.d.ts
 
 # env
 .env
