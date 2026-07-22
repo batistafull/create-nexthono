@@ -2,11 +2,20 @@
 
 Guía para agentes (y personas) que trabajan en este proyecto **Nexthono**: un
 monorepo Next.js 15 (App Router) + Hono montado como API dentro del mismo
-proceso de Next. La base de datos es SQLite vía `better-sqlite3`.
+proceso de Next, que **corre sobre Cloudflare Workers** (vía OpenNext) con
+**Cloudflare D1** (SQLite) como base de datos.
 
 El objetivo de este documento es que puedas **añadir funcionalidad siguiendo los
 patrones existentes** sin reinventar la estructura. El módulo `users` (backend) y
 las páginas/servicios de usuarios (frontend) son la referencia canónica: cópialos.
+
+> **Cloudflare en 30 segundos.** D1 no es un fichero local: es un *binding por
+> request* (`env.DB`). El repository lo obtiene con `getDb()`
+> (`getCloudflareContext().env.DB`), **nunca** un singleton importado. Como D1 es
+> asíncrono, **todo el camino repository → service → controller es `async`** y los
+> binds son **posicionales `?`** (D1 no soporta `@nombre`). Los secretos
+> (`JWT_SECRET`, ...) llegan por el binding: `.dev.vars` en local,
+> `wrangler secret put` en producción. El despliegue está en la sección 10.
 
 ---
 
@@ -22,19 +31,16 @@ template/
 │   ├── index.ts                # App raíz: middlewares globales + montaje de v1
 │   ├── types.ts                # AppEnv (variables de contexto: user, jwtPayload)
 │   ├── lib/                    # Utilidades transversales
-│   │   ├── env.ts              # Carga de variables de entorno
 │   │   ├── http-error.ts       # HttpError + helpers (notFound, conflict, ...)
-│   │   └── jwt.ts              # Firma/verificación de JWT
+│   │   └── jwt.ts              # Firma/verificación de JWT (secret desde el binding)
 │   ├── middleware/
 │   │   ├── auth.ts             # requireAuth, requireRole(...)
 │   │   └── error.ts            # onError centralizado
 │   ├── database/
-│   │   ├── client.ts           # Conexión SQLite (única fuente de la conexión)
+│   │   ├── client.ts           # getDb(): binding D1 por request (única fuente)
 │   │   ├── base.ts             # Campos base obligatorios + helpers
-│   │   ├── schema.sql          # Tabla _migrations (tracker)
-│   │   ├── migrations.ts       # Runner de migraciones (pnpm db:migrate)
-│   │   ├── migrations/         # *.sql con prefijo numérico (001_, 002_, ...)
-│   │   └── seeds.ts            # Datos base idempotentes (pnpm db:seed)
+│   │   ├── migrations/         # *.sql con prefijo 4 dígitos (0001_, 0002_, ...) — wrangler
+│   │   └── seeds.ts            # Datos base idempotentes vía wrangler d1 execute (pnpm db:seed)
 │   └── v1/                     # API versionada
 │       ├── auth/               # Módulo de autenticación
 │       └── users/              # Módulo de referencia (CRUD completo)
@@ -45,27 +51,32 @@ template/
 │           ├── schema.ts       # Esquemas Zod de validación
 │           └── types.ts        # Tipos del dominio (Row, público, inputs)
 │
-└── src/                        # Frontend Next.js (App Router)
-    ├── app/                    # Rutas/páginas
-    │   ├── api/[[...route]]/route.ts   # Puente Next -> app Hono
-    │   ├── layout.tsx
-    │   ├── page.tsx
-    │   ├── login/page.tsx
-    │   └── users/page.tsx      # Página de referencia
-    ├── components/ui/          # Componentes de UI (button, ...)
-    ├── hooks/                  # Hooks de datos (useUsers, useAuth)
-    ├── services/               # Clientes HTTP por dominio (+ api.client.ts)
-    ├── store/                  # Estado global Zustand (auth.store.ts)
-    ├── types/                  # Tipos compartidos del frontend
-    ├── lib/                    # config.ts, utils.ts
-    └── utils/                  # Helpers (formatDate, ...)
+├── src/                        # Frontend Next.js (App Router)
+│   ├── app/                    # Rutas/páginas
+│   │   ├── api/[[...route]]/route.ts   # Puente Next -> app Hono (runtime = "nodejs")
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   ├── login/page.tsx
+│   │   └── users/page.tsx      # Página de referencia
+│   ├── components/ui/          # Componentes de UI (button, ...)
+│   ├── hooks/                  # Hooks de datos (useUsers, useAuth)
+│   ├── services/               # Clientes HTTP por dominio (+ api.client.ts)
+│   ├── store/                  # Estado global Zustand (auth.store.ts)
+│   ├── types/                  # Tipos compartidos del frontend
+│   ├── lib/                    # config.ts, utils.ts
+│   └── utils/                  # Helpers (formatDate, ...)
+│
+├── wrangler.jsonc              # Worker: nodejs_compat, assets y binding D1 (DB)
+├── open-next.config.ts         # Adaptador OpenNext para Cloudflare
+├── cloudflare-env.d.ts         # Tipos del binding (temporal: bórralo tras cf-typegen)
+└── .dev.vars                   # Secretos locales (copiar de .dev.vars.example; git-ignored)
 ```
 
 ### Flujo de una petición
 
 ```
 Componente/Hook → service (src/services) → api.client → fetch
-   → /api/... (Next catch-all) → app Hono → routes → controller → service → repository → SQLite
+   → /api/... (Next catch-all) → app Hono → routes → controller → service → repository → D1
 ```
 
 ### Alias de importación
@@ -79,7 +90,8 @@ Componente/Hook → service (src/services) → api.client → fetch
   al service y da forma a la respuesta.
 - **El service contiene la lógica de negocio** y devuelve datos "públicos" (sin
   campos sensibles como `password_hash`).
-- **El repository es la única capa que ejecuta SQL.** Siempre respeta el borrado
+- **El repository es la única capa que ejecuta SQL.** Obtiene la conexión con
+  `getDb()`, es `async`, usa binds posicionales `?` y respeta siempre el borrado
   lógico (`deleted = 0`).
 - Las respuestas exitosas se envuelven en `{ data: ... }`. Los errores en
   `{ error: "mensaje" }` (lo hace `onError`).
@@ -141,64 +153,87 @@ export const productIdParamSchema = z.object({
 });
 ```
 
-### Paso 3 — `repository.ts` (única capa con SQL)
+### Paso 3 — `repository.ts` (única capa con SQL, async y D1)
 
-Usa siempre los helpers de `database/base.ts`:
-`newBaseFields(actorId)` al insertar, `touchBaseFields(actorId)` al actualizar,
-y `mapDeleted(row)` al leer (convierte el `deleted` 0/1 de SQLite en booleano).
+D1 es **asíncrono**, así que cada método devuelve una `Promise`. La conexión se
+obtiene con `getDb()` (binding por request), los parámetros son **posicionales**
+(`?` — D1 no soporta `@nombre`) y las escrituras usan `RETURNING *` para no hacer
+una segunda consulta. Usa siempre los helpers de `database/base.ts`:
+`newBaseFields(actorId)` al insertar, `touchBaseFields(actorId)` al actualizar y
+`mapDeleted(row)` al leer (convierte el `deleted` 0/1 de SQLite en booleano).
 Filtra siempre por `deleted = 0`.
 
 ```ts
 import { mapDeleted, newBaseFields, touchBaseFields } from "../../database/base";
-import { db } from "../../database/client";
+import { getDb } from "../../database/client";
 import type { ProductRow } from "./types";
 
 type RawProductRow = Omit<ProductRow, "deleted"> & { deleted: number };
 
 export const productRepository = {
-  findAll(): ProductRow[] {
-    const rows = db
+  async findAll(): Promise<ProductRow[]> {
+    const { results } = await getDb()
       .prepare("SELECT * FROM products WHERE deleted = 0 ORDER BY date_entered DESC")
-      .all() as RawProductRow[];
-    return rows.map((r) => mapDeleted(r));
+      .all<RawProductRow>();
+    return results.map((r) => mapDeleted(r));
   },
 
-  findById(id: string): ProductRow | null {
-    const row = db.prepare("SELECT * FROM products WHERE id = ? AND deleted = 0").get(id) as
-      | RawProductRow
-      | undefined;
+  async findById(id: string): Promise<ProductRow | null> {
+    const row = await getDb()
+      .prepare("SELECT * FROM products WHERE id = ? AND deleted = 0")
+      .bind(id)
+      .first<RawProductRow>();
     return row ? mapDeleted(row) : null;
   },
 
-  create(data: { name: string; price: number }, actorId: string | null = null): ProductRow {
+  async create(
+    data: { name: string; price: number },
+    actorId: string | null = null,
+  ): Promise<ProductRow> {
     const base = newBaseFields(actorId);
-    db.prepare(
-      `INSERT INTO products
-         (id, date_entered, date_modified, create_by, modified_by, deleted, name, price)
-       VALUES
-         (@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted, @name, @price)`,
-    ).run({ ...base, name: data.name, price: data.price });
-    return this.findById(base.id)!;
+    const row = await getDb()
+      .prepare(
+        `INSERT INTO products
+           (id, date_entered, date_modified, create_by, modified_by, deleted, name, price)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`,
+      )
+      .bind(
+        base.id,
+        base.date_entered,
+        base.date_modified,
+        base.create_by,
+        base.modified_by,
+        base.deleted,
+        data.name,
+        data.price,
+      )
+      .first<RawProductRow>();
+    return mapDeleted(row!);
   },
 
-  softDelete(id: string, actorId: string | null = null): boolean {
+  async softDelete(id: string, actorId: string | null = null): Promise<boolean> {
     const touch = touchBaseFields(actorId);
-    const result = db
+    const result = await getDb()
       .prepare(
-        `UPDATE products SET deleted = 1, date_modified = @date_modified, modified_by = @modified_by
-         WHERE id = @id AND deleted = 0`,
+        `UPDATE products SET deleted = 1, date_modified = ?, modified_by = ?
+         WHERE id = ? AND deleted = 0`,
       )
-      .run({ id, ...touch });
-    return result.changes > 0;
+      .bind(touch.date_modified, touch.modified_by, id)
+      .run();
+    return result.meta.changes > 0;
   },
 };
 ```
 
 > Para `update`, construye el `SET` dinámicamente solo con los campos presentes,
-> igual que `userRepository.update`.
+> igual que `userRepository.update`. Con binds posicionales, **el array de `params`
+> debe seguir el orden de los `?`**: empuja primero los campos del `SET`, luego los
+> de `touchBaseFields`, y el `id` del `WHERE` al final. Cierra con `RETURNING *`.
 
-### Paso 4 — `service.ts` (lógica de negocio)
+### Paso 4 — `service.ts` (lógica de negocio, async)
 
+Como el repository es `async`, el service también lo es: `await` en cada llamada.
 Lanza errores con los helpers de `lib/http-error.ts` (`notFound`, `conflict`,
 `badRequest`, ...). El `onError` los convierte en la respuesta HTTP correcta.
 
@@ -208,31 +243,31 @@ import { productRepository } from "./repository";
 import type { CreateProductInput, Product } from "./types";
 
 export const productService = {
-  list(): Product[] {
+  async list(): Promise<Product[]> {
     return productRepository.findAll();
   },
 
-  getById(id: string): Product {
-    const product = productRepository.findById(id);
+  async getById(id: string): Promise<Product> {
+    const product = await productRepository.findById(id);
     if (!product) throw notFound("Product not found");
     return product;
   },
 
-  create(input: CreateProductInput, actorId: string | null = null): Product {
+  async create(input: CreateProductInput, actorId: string | null = null): Promise<Product> {
     return productRepository.create(input, actorId);
   },
 
-  remove(id: string, actorId: string | null = null): void {
-    const ok = productRepository.softDelete(id, actorId);
+  async remove(id: string, actorId: string | null = null): Promise<void> {
+    const ok = await productRepository.softDelete(id, actorId);
     if (!ok) throw notFound("Product not found");
   },
 };
 ```
 
-### Paso 5 — `controller.ts` (capa HTTP)
+### Paso 5 — `controller.ts` (capa HTTP, async)
 
-Nunca toca la base de datos. El actor autenticado se obtiene con
-`c.get("user")`.
+Nunca toca la base de datos. Todos los handlers son `async` y hacen `await` del
+service. El actor autenticado se obtiene con `c.get("user")`.
 
 ```ts
 import type { Context } from "hono";
@@ -241,24 +276,24 @@ import { productService } from "./service";
 import type { CreateProductInput } from "./types";
 
 export const productsController = {
-  list(c: Context<AppEnv>) {
-    return c.json({ data: productService.list() });
+  async list(c: Context<AppEnv>) {
+    return c.json({ data: await productService.list() });
   },
 
-  getById(c: Context<AppEnv>) {
+  async getById(c: Context<AppEnv>) {
     const { id } = c.req.param();
-    return c.json({ data: productService.getById(id) });
+    return c.json({ data: await productService.getById(id) });
   },
 
   async create(c: Context<AppEnv>) {
     const body = (await c.req.json()) as CreateProductInput;
     const actorId = c.get("user")?.id ?? null;
-    return c.json({ data: productService.create(body, actorId) }, 201);
+    return c.json({ data: await productService.create(body, actorId) }, 201);
   },
 
-  remove(c: Context<AppEnv>) {
+  async remove(c: Context<AppEnv>) {
     const { id } = c.req.param();
-    productService.remove(id, c.get("user")?.id ?? null);
+    await productService.remove(id, c.get("user")?.id ?? null);
     return c.body(null, 204);
   },
 };
@@ -431,30 +466,37 @@ la navegación si aplica.
 
 ---
 
-## 4. Migraciones
+## 4. Migraciones (Cloudflare D1)
 
-El runner es [server/api/database/migrations.ts](server/api/database/migrations.ts):
-forward-only, aplica en orden de nombre los `*.sql` de `database/migrations/` y
-registra los aplicados en la tabla `_migrations`.
+Las migraciones las gestiona **wrangler**, no un runner propio. Los `*.sql` viven
+en `server/api/database/migrations/` (configurado con `migrations_dir` en
+[wrangler.jsonc](wrangler.jsonc)) y wrangler registra las aplicadas en su propia
+tabla `d1_migrations`.
 
 ### Reglas
 
-- Cada migración es un archivo `.sql` con **prefijo numérico incremental**:
-  `001_init.sql`, `002_products.sql`, ... El orden de aplicación es el orden
-  alfabético del nombre.
+- Cada migración es un archivo `.sql` con **prefijo de 4 dígitos incremental**:
+  `0001_init.sql`, `0002_products.sql`, ... El orden de aplicación es el orden
+  alfabético del nombre (por eso 4 dígitos: `0002_` ordena bien frente a `0010_`).
 - **Toda tabla empieza por los 6 campos base obligatorios** (ver
   [server/api/database/base.ts](server/api/database/base.ts)):
   `id`, `date_entered`, `date_modified`, `create_by`, `modified_by`, `deleted`.
   Los campos del dominio van después.
 - No edites una migración ya aplicada en otros entornos; crea una nueva.
-- Cada migración se ejecuta dentro de una transacción.
 
 ### Crear una migración
 
-Crea `server/api/database/migrations/002_products.sql`:
+Puedes dejar que wrangler cree el archivo con el siguiente número disponible:
+
+```bash
+npx wrangler d1 migrations create nexthono products
+# crea server/api/database/migrations/0002_products.sql (vacío)
+```
+
+Y lo rellenas:
 
 ```sql
--- 002_products: tabla de productos.
+-- 0002_products: tabla de productos.
 -- Campos base primero; campos del dominio después.
 
 CREATE TABLE IF NOT EXISTS products (
@@ -478,47 +520,56 @@ CREATE TABLE IF NOT EXISTS products (
 ### Comandos
 
 ```bash
-pnpm db:migrate          # Aplica migraciones pendientes
-pnpm db:migrate --fresh  # Borra TODAS las tablas y reaplica desde cero
-pnpm db:reset            # --fresh + seed (deja la BD lista para desarrollar)
+pnpm db:migrate          # Aplica migraciones pendientes en la D1 LOCAL (.wrangler/state)
+pnpm db:migrate:remote   # Aplica migraciones en la D1 desplegada
+pnpm db:reset            # Dropea tablas + re-migra + re-siembra (solo local)
 ```
 
-> El bloque de columnas base también está disponible como constante
-> `BASE_COLUMNS_SQL` en `base.ts` por si prefieres generarlo desde código.
+> No hay `--fresh`: para empezar de cero en local usa `pnpm db:reset` (o borra
+> `.wrangler/state/v3/d1`). El bloque de columnas base también está disponible
+> como constante `BASE_COLUMNS_SQL` en `base.ts` por si prefieres generarlo desde
+> código.
 
 ---
 
 ## 5. Seeds
 
-El seed vive en [server/api/database/seeds.ts](server/api/database/seeds.ts) y
-debe ser **idempotente**: ejecutarlo dos veces no duplica datos. Comprueba antes
-de insertar y salta si ya existe. Usa `newBaseFields(null)` para los campos base
-(actor `null` porque no hay usuario autenticado al sembrar).
+El seed vive en [server/api/database/seeds.ts](server/api/database/seeds.ts):
+un script `tsx` que **genera SQL y lo aplica con `wrangler d1 execute --file`**
+(no puede hablar con D1 "en proceso" como hacía better-sqlite3). Debe ser
+**idempotente**: usa `INSERT OR IGNORE` apoyándote en el índice único parcial
+`(campo) WHERE deleted = 0`, de modo que ejecutarlo dos veces no duplica datos.
+Usa `newBaseFields(null)` / `randomUUID()` para los campos base (actor `null`
+porque no hay usuario autenticado al sembrar).
 
-Actualmente siembra el usuario admin (`admin@nexthono.dev` / `admin1234`).
+Actualmente siembra el usuario admin (`admin@nexthono.dev` / `admin1234`),
+calculando el hash bcrypt en el momento.
 
 ### Añadir datos al seed
 
+Concatena más sentencias al `sql` que se escribe al fichero temporal, antes de
+invocar wrangler:
+
 ```ts
-// dentro de seed(), tras el bloque del admin:
-const exists = db.prepare("SELECT id FROM products WHERE name = ? AND deleted = 0").get("Demo");
-if (!exists) {
-  const base = newBaseFields(null);
-  db.prepare(
-    `INSERT INTO products
-       (id, date_entered, date_modified, create_by, modified_by, deleted, name, price)
-     VALUES
-       (@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted, @name, @price)`,
-  ).run({ ...base, name: "Demo", price: 9.99 });
-  console.log("✅ Seeded demo product");
-}
+// junto al INSERT del admin, añade al string `sql`:
+sql += `
+INSERT OR IGNORE INTO products
+  (id, date_entered, date_modified, create_by, modified_by, deleted, name, price)
+VALUES
+  ('${randomUUID()}', '${now}', '${now}', NULL, NULL, 0, 'Demo', 9.99);`;
 ```
+
+> Para valores dinámicos que vengan de JS (como el hash bcrypt), interpólalos en
+> el string; como el SQL va a un **fichero** (no al shell), el `$` del hash se
+> escribe literal sin escaping. Evita comillas simples sin escapar dentro de los
+> valores de texto.
 
 ### Comandos
 
 ```bash
-pnpm db:seed     # Ejecuta el seed (idempotente)
-pnpm db:reset    # Reaplica migraciones desde cero y siembra
+pnpm db:seed          # Siembra la D1 local (idempotente)
+pnpm db:seed:remote   # Siembra la D1 desplegada
+pnpm db:reset         # Reaplica migraciones desde cero y siembra (local)
 ```
 
 ---
@@ -526,16 +577,21 @@ pnpm db:reset    # Reaplica migraciones desde cero y siembra
 ## 6. Comandos útiles
 
 ```bash
-pnpm dev              # Next dev (frontend + API en el mismo proceso)
-pnpm build            # Build de producción
-pnpm lint             # Biome check
-pnpm lint:fix         # Biome check --write
-pnpm format           # Biome format --write
-pnpm db:migrate       # Migraciones
-pnpm db:seed          # Seeds
-pnpm db:reset         # Reset completo de la BD
-pnpm nexthono-module  # Generador interactivo de módulos CRUD (ver sección 7)
-pnpm nexthono-field   # Agrega campos a un módulo existente (ver sección 8)
+pnpm dev               # Next dev (frontend + API en el mismo proceso; bindings vía OpenNext)
+pnpm build             # Build de producción (Next)
+pnpm preview           # Build OpenNext + preview en workerd local
+pnpm deploy            # Build OpenNext + wrangler deploy
+pnpm cf-typegen        # Genera los tipos del binding (wrangler types)
+pnpm lint              # Biome check
+pnpm lint:fix          # Biome check --write
+pnpm format            # Biome format --write
+pnpm db:migrate        # Migraciones (D1 local)
+pnpm db:migrate:remote # Migraciones (D1 desplegada)
+pnpm db:seed           # Seeds (D1 local)
+pnpm db:seed:remote    # Seeds (D1 desplegada)
+pnpm db:reset          # Reset completo de la BD (local)
+pnpm nexthono-module   # Generador interactivo de módulos CRUD (ver sección 7)
+pnpm nexthono-field    # Agrega campos a un módulo existente (ver sección 8)
 ```
 
 ## 7. Generador de módulos (`pnpm nexthono-module`)
@@ -544,9 +600,14 @@ Automatiza todo el checklist de las secciones 2–4: crea el módulo backend
 completo, el módulo frontend completo y su migración, siguiendo exactamente
 los mismos patrones que `users`. El script vive en
 [.nexthono/create-module.ts](.nexthono/create-module.ts), en una carpeta
-oculta separada de `server/` y `src/` (mismo trato que `.gitignore` o `.env`:
-se publica como `_nexthono/` dentro del paquete npm y se renombra a
+oculta separada de `server/` y `src/` (mismo trato que `.gitignore` o
+`.dev.vars`: se publica como `_nexthono/` dentro del paquete npm y se renombra a
 `.nexthono/` al crear el proyecto).
+
+> El código que genera sigue el patrón **D1** de las secciones 2–5: repositories
+> `async` con `getDb()`, binds posicionales `?`, `RETURNING *` y migraciones con
+> prefijo de 4 dígitos (`wrangler d1 migrations`). No necesita retoques para
+> funcionar sobre D1.
 
 ```bash
 pnpm nexthono-module
@@ -662,6 +723,9 @@ generarlos. El script vive en
 [.nexthono/add-field.ts](.nexthono/add-field.ts) y comparte helpers con
 `create-module.ts` en [.nexthono/lib/shared.ts](.nexthono/lib/shared.ts).
 
+> Los parches que aplica siguen el patrón **D1** (async, `getDb()`, binds `?`,
+> `RETURNING *`), consistentes con lo que genera `nexthono-module`.
+
 ```bash
 pnpm nexthono-field
 ```
@@ -725,11 +789,63 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku_active
 
 ## 9. Convenciones rápidas
 
+- **Conexión:** el repository obtiene la BD con `getDb()` (binding D1 por
+  request), **nunca** un singleton importado. Todo el camino
+  repository → service → controller es `async`.
+- **SQL en D1:** binds **posicionales** `?` (no `@nombre`); escrituras con
+  `RETURNING *` para no repetir consulta; resultados con `.all<T>()` /
+  `.first<T>()`; filas afectadas con `result.meta.changes`.
 - **SQLite ↔ TS:** `deleted` se guarda como `0/1`; usa `mapDeleted` al leer.
   Nunca borres físicamente, usa `softDelete`.
 - **Auditoría:** propaga siempre el `actorId` (`c.get("user")?.id ?? null`) hasta
   el repository para rellenar `create_by`/`modified_by`.
+- **Secretos:** léelos del binding (`getCloudflareContext().env`), no de
+  `process.env` a nivel de módulo. Local en `.dev.vars`, prod con
+  `wrangler secret put`.
 - **Errores:** en el backend lanza `HttpError` con los helpers de `http-error.ts`;
   no devuelvas códigos a mano. En el frontend captura `ApiError`.
 - **Respuestas:** éxito = `{ data }`; error = `{ error }`.
 - **Formato:** este proyecto usa Biome. Ejecuta `pnpm lint:fix` antes de terminar.
+
+---
+
+## 10. Despliegue en Cloudflare
+
+El proyecto corre en **Cloudflare Workers** mediante el adaptador **OpenNext**
+([open-next.config.ts](open-next.config.ts)); Next se ejecuta en el runtime
+Node.js sobre `workerd` (por eso la ruta puente usa `runtime = "nodejs"` y
+`wrangler.jsonc` activa `nodejs_compat`). D1 se declara como binding `DB` en
+[wrangler.jsonc](wrangler.jsonc).
+
+### Bootstrap (una sola vez)
+
+```bash
+npx wrangler d1 create nexthono      # copia el database_id que imprime
+# pégalo en wrangler.jsonc → d1_databases[0].database_id
+pnpm cf-typegen                      # genera worker-configuration.d.ts (tipa env.DB)
+```
+
+> Tras `cf-typegen`, **borra `cloudflare-env.d.ts`**: era un puente para tipar el
+> binding antes de existir wrangler; ahora lo genera `worker-configuration.d.ts`
+> y mantener ambos provoca una declaración duplicada de `CloudflareEnv`.
+
+### Secretos
+
+- **Local:** copia `.dev.vars.example` → `.dev.vars` y ajusta `JWT_SECRET`,
+  `JWT_EXPIRES_IN`. `next dev` los expone al binding vía OpenNext. Sin ellos,
+  la firma de JWT cae a un secreto de desarrollo (aceptable solo en local).
+- **Producción:** `npx wrangler secret put JWT_SECRET` (nunca los pongas en
+  `wrangler.jsonc`, que sí se commitea).
+
+### Publicar
+
+```bash
+pnpm db:migrate:remote               # aplica migraciones en la D1 desplegada
+pnpm db:seed:remote                  # (opcional) siembra el admin en remoto
+npx wrangler secret put JWT_SECRET   # si no lo hiciste ya
+pnpm deploy                          # build OpenNext + wrangler deploy
+```
+
+Para probar el build de Worker en local antes de publicar: `pnpm preview`
+(compila con OpenNext y lo sirve en `workerd`, más fiel a producción que
+`pnpm dev`).

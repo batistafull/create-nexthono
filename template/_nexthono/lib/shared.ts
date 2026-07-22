@@ -335,5 +335,6 @@ export function nextMigrationPrefix(migrationFiles: string[]): string {
     const m = f.match(/^(\d+)_/);
     if (m) max = Math.max(max, Number.parseInt(m[1], 10));
   }
-  return String(max + 1).padStart(3, "0");
+  // 4 digits to match wrangler's convention (0001_, 0002_, ...).
+  return String(max + 1).padStart(4, "0");
 }

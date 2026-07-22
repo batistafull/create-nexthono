@@ -344,14 +344,15 @@ function patchRepositoryTs(
   // 3) findBy<Field>() methods for unique fields — inserted right before create().
   const uniqueFields = fields.filter((f) => f.unique);
   if (uniqueFields.length > 0) {
-    const createSig = `\n  create(data: Create${Pascal}Input, actorId: string | null = null): ${Pascal}Row {\n`;
+    const createSig = `\n  async create(data: Create${Pascal}Input, actorId: string | null = null): Promise<${Pascal}Row> {\n`;
     const methods = uniqueFields
       .map(
         (f) => `
-  findBy${toPascal(f.name)}(${f.name}: ${TS_TYPE[f.type]}): ${Pascal}Row | null {
-    const row = db
+  async findBy${toPascal(f.name)}(${f.name}: ${TS_TYPE[f.type]}): Promise<${Pascal}Row | null> {
+    const row = await getDb()
       .prepare("SELECT * FROM ${table} WHERE ${f.name} = ? AND deleted = 0")
-      .get(${f.name}) as Raw${Pascal}Row | undefined;
+      .bind(${f.name})
+      .first<Raw${Pascal}Row>();
     return row ? mapRow(row) : null;
   },`,
       )
@@ -370,30 +371,31 @@ function patchRepositoryTs(
     const extra = fields.map((f) => `, ${f.name}`).join("");
     return `(id, date_entered, date_modified, create_by, modified_by, deleted${suffix}${extra})`;
   });
-  const valuesRe =
-    /\(@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted((?:, @\w+)*)\)/;
+  const valuesRe = /VALUES \(([?, ]+)\)/;
   if (!valuesRe.test(content))
     throw new Error("No se encontró la lista de VALUES del INSERT en repository.ts");
-  content = content.replace(valuesRe, (_m, suffix: string) => {
-    const extra = fields.map((f) => `, @${f.name}`).join("");
-    return `(@id, @date_entered, @date_modified, @create_by, @modified_by, @deleted${suffix}${extra})`;
+  content = content.replace(valuesRe, (_m, placeholders: string) => {
+    const extra = fields.map(() => ", ?").join("");
+    return `VALUES (${placeholders}${extra})`;
   });
 
-  // 5) create(): new param lines inside `.run({ ...base, ... })`. As with
-  // mapRow(), a module with zero existing domain fields collapses this to
-  // `.run({\n      ...base,\n    });` with no field lines in between, so the
-  // "between" capture may or may not already end in `\n` — normalize first.
-  content = spliceBetween(content, ".run({\n      ...base,\n", "    });", (b) => {
+  // 5) create(): new positional value lines inside `.bind(...)`, appended after
+  // the six base binds. As with mapRow(), a module with zero existing domain
+  // fields collapses this to `base.deleted,\n      )` with no field lines in
+  // between, so the "between" capture may or may not already end in `\n` —
+  // normalize first. Column list, VALUES `?` list and bind args all grow at the
+  // end, so their order stays aligned.
+  content = spliceBetween(content, "        base.deleted,\n", "      )\n      .first<", (b) => {
     const trimmed = b.replace(/\n$/, "");
     return `${fields.reduce(
-      (acc, f) => appendLine(acc, `      ${f.name}: ${insertValueExpr(f)},`),
+      (acc, f) => appendLine(acc, `        ${insertValueExpr(f)},`),
       trimmed,
     )}\n`;
   });
 
   // 6) update(): new `if (data.<field> !== undefined) {...}` blocks, scoped to
   //    the update() method only (softDelete() also calls touchBaseFields).
-  const updateSig = `update(id: string, data: Update${Pascal}Input, actorId: string | null = null): ${Pascal}Row | null {\n`;
+  const updateSig = `  async update(\n    id: string,\n    data: Update${Pascal}Input,`;
   const updateSigIdx = content.indexOf(updateSig);
   if (updateSigIdx === -1) throw new Error("No se encontró el método update() en repository.ts");
   const touchAnchor = "\n\n    const touch = touchBaseFields(actorId);";
@@ -403,8 +405,8 @@ function patchRepositoryTs(
   const ifBlocks = fields
     .map(
       (f) => `\n    if (data.${f.name} !== undefined) {
-      sets.push("${f.name} = @${f.name}");
-      params.${f.name} = ${updateAssignExpr(f)};
+      sets.push("${f.name} = ?");
+      params.push(${updateAssignExpr(f)});
     }`,
     )
     .join("");
@@ -423,7 +425,7 @@ function patchServiceTs(initialContent: string, camelSingular: string, fields: F
     .map(
       (
         f,
-      ) => `    if (input.${f.name} !== undefined && ${camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name})) {
+      ) => `    if (input.${f.name} !== undefined && (await ${camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name}))) {
       throw conflict("${f.label} already in use");
     }
 `,
@@ -438,7 +440,7 @@ function patchServiceTs(initialContent: string, camelSingular: string, fields: F
   const updateChecks = uniqueFields
     .map(
       (f) => `    if (input.${f.name} !== undefined && input.${f.name} !== existing.${f.name}) {
-      const clash = ${camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name});
+      const clash = await ${camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name});
       if (clash && clash.id !== id) throw conflict("${f.label} already in use");
     }
 `,
@@ -446,7 +448,7 @@ function patchServiceTs(initialContent: string, camelSingular: string, fields: F
     .join("");
   content = insertBeforeLiteral(
     content,
-    `const updated = ${camelSingular}Repository.update(id, input, actorId);`,
+    `const updated = await ${camelSingular}Repository.update(id, input, actorId);`,
     updateChecks,
   );
 

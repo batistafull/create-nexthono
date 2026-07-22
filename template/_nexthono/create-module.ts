@@ -149,14 +149,14 @@ function genRepositoryTs(n: ModuleNames, fields: FieldDef[]): string {
     "deleted",
     ...fields.map((f) => f.name),
   ];
-  const insertAtCols = insertCols.map((col) => `@${col}`);
-  const insertParamsLines = fields.map((f) => `      ${f.name}: ${insertValueExpr(f)},`).join("\n");
+  const placeholders = insertCols.map(() => "?").join(", ");
+  const bindFieldLines = fields.map((f) => `        ${insertValueExpr(f)},`).join("\n");
 
   const updateIfBlocks = fields
     .map(
       (f) => `    if (data.${f.name} !== undefined) {
-      sets.push("${f.name} = @${f.name}");
-      params.${f.name} = ${updateAssignExpr(f)};
+      sets.push("${f.name} = ?");
+      params.push(${updateAssignExpr(f)});
     }`,
     )
     .join("\n");
@@ -164,17 +164,18 @@ function genRepositoryTs(n: ModuleNames, fields: FieldDef[]): string {
   const findByUniqueMethods = uniqueFields
     .map(
       (f) => `
-  findBy${toPascal(f.name)}(${f.name}: ${TS_TYPE[f.type]}): ${n.Pascal}Row | null {
-    const row = db
+  async findBy${toPascal(f.name)}(${f.name}: ${TS_TYPE[f.type]}): Promise<${n.Pascal}Row | null> {
+    const row = await getDb()
       .prepare("SELECT * FROM ${n.table} WHERE ${f.name} = ? AND deleted = 0")
-      .get(${f.name}) as Raw${n.Pascal}Row | undefined;
+      .bind(${f.name})
+      .first<Raw${n.Pascal}Row>();
     return row ? mapRow(row) : null;
   },`,
     )
     .join("\n");
 
   return `import { mapDeleted, newBaseFields, touchBaseFields } from "../../database/base";
-import { db } from "../../database/client";
+import { getDb } from "../../database/client";
 import type { Create${n.Pascal}Input, ${n.Pascal}Row, Update${n.Pascal}Input } from "./types";
 
 /** A row as SQLite returns it: 0/1 columns are not yet converted to booleans. */
@@ -189,65 +190,82 @@ ${mapRowBooleanLines}
 
 /**
  * Data-access layer for ${n.table}. The ONLY layer that talks to the database.
- * Soft deletes are respected everywhere (deleted = 0).
+ * D1 is async; params are positional (?), writes use RETURNING *. Soft deletes
+ * are respected everywhere (deleted = 0).
  */
 export const ${n.camelSingular}Repository = {
-  findAll(): ${n.Pascal}Row[] {
-    const rows = db
+  async findAll(): Promise<${n.Pascal}Row[]> {
+    const { results } = await getDb()
       .prepare("SELECT * FROM ${n.table} WHERE deleted = 0 ORDER BY date_entered DESC")
-      .all() as Raw${n.Pascal}Row[];
-    return rows.map(mapRow);
+      .all<Raw${n.Pascal}Row>();
+    return results.map(mapRow);
   },
 
-  findById(id: string): ${n.Pascal}Row | null {
-    const row = db.prepare("SELECT * FROM ${n.table} WHERE id = ? AND deleted = 0").get(id) as
-      | Raw${n.Pascal}Row
-      | undefined;
+  async findById(id: string): Promise<${n.Pascal}Row | null> {
+    const row = await getDb()
+      .prepare("SELECT * FROM ${n.table} WHERE id = ? AND deleted = 0")
+      .bind(id)
+      .first<Raw${n.Pascal}Row>();
     return row ? mapRow(row) : null;
   },
 ${findByUniqueMethods}
 
-  create(data: Create${n.Pascal}Input, actorId: string | null = null): ${n.Pascal}Row {
+  async create(data: Create${n.Pascal}Input, actorId: string | null = null): Promise<${n.Pascal}Row> {
     const base = newBaseFields(actorId);
-    db.prepare(
-      \`INSERT INTO ${n.table}
-         (${insertCols.join(", ")})
-       VALUES
-         (${insertAtCols.join(", ")})\`,
-    ).run({
-      ...base,
-${insertParamsLines}
-    });
-    return this.findById(base.id)!;
+    const row = await getDb()
+      .prepare(
+        \`INSERT INTO ${n.table}
+           (${insertCols.join(", ")})
+         VALUES (${placeholders})
+         RETURNING *\`,
+      )
+      .bind(
+        base.id,
+        base.date_entered,
+        base.date_modified,
+        base.create_by,
+        base.modified_by,
+        base.deleted,
+${bindFieldLines}
+      )
+      .first<Raw${n.Pascal}Row>();
+    return mapRow(row!);
   },
 
-  update(id: string, data: Update${n.Pascal}Input, actorId: string | null = null): ${n.Pascal}Row | null {
+  async update(
+    id: string,
+    data: Update${n.Pascal}Input,
+    actorId: string | null = null,
+  ): Promise<${n.Pascal}Row | null> {
     const sets: string[] = [];
-    const params: Record<string, unknown> = { id };
+    const params: unknown[] = [];
 
 ${updateIfBlocks}
 
     const touch = touchBaseFields(actorId);
-    sets.push("date_modified = @date_modified", "modified_by = @modified_by");
-    params.date_modified = touch.date_modified;
-    params.modified_by = touch.modified_by;
+    sets.push("date_modified = ?", "modified_by = ?");
+    params.push(touch.date_modified, touch.modified_by);
+    params.push(id);
 
-    db.prepare(\`UPDATE ${n.table} SET \${sets.join(", ")} WHERE id = @id AND deleted = 0\`).run(params);
-
-    return this.findById(id);
+    const row = await getDb()
+      .prepare(\`UPDATE ${n.table} SET \${sets.join(", ")} WHERE id = ? AND deleted = 0 RETURNING *\`)
+      .bind(...params)
+      .first<Raw${n.Pascal}Row>();
+    return row ? mapRow(row) : null;
   },
 
   /** Soft delete. */
-  softDelete(id: string, actorId: string | null = null): boolean {
+  async softDelete(id: string, actorId: string | null = null): Promise<boolean> {
     const touch = touchBaseFields(actorId);
-    const result = db
+    const result = await getDb()
       .prepare(
         \`UPDATE ${n.table}
-           SET deleted = 1, date_modified = @date_modified, modified_by = @modified_by
-         WHERE id = @id AND deleted = 0\`,
+           SET deleted = 1, date_modified = ?, modified_by = ?
+         WHERE id = ? AND deleted = 0\`,
       )
-      .run({ id, ...touch });
-    return result.changes > 0;
+      .bind(touch.date_modified, touch.modified_by, id)
+      .run();
+    return result.meta.changes > 0;
   },
 };
 `;
@@ -260,7 +278,7 @@ function genServiceTs(n: ModuleNames, fields: FieldDef[]): string {
     .map(
       (f) => `    if (
       input.${f.name} !== undefined &&
-      ${n.camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name})
+      (await ${n.camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name}))
     ) {
       throw conflict("${f.label} already in use");
     }
@@ -271,7 +289,7 @@ function genServiceTs(n: ModuleNames, fields: FieldDef[]): string {
   const updateChecks = uniqueFields
     .map(
       (f) => `    if (input.${f.name} !== undefined && input.${f.name} !== existing.${f.name}) {
-      const clash = ${n.camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name});
+      const clash = await ${n.camelSingular}Repository.findBy${toPascal(f.name)}(input.${f.name});
       if (clash && clash.id !== id) throw conflict("${f.label} already in use");
     }
 `,
@@ -284,30 +302,30 @@ import type { Create${n.Pascal}Input, ${n.Pascal}, Update${n.Pascal}Input } from
 
 /** Business logic for ${n.table}. */
 export const ${n.camelSingular}Service = {
-  list(): ${n.Pascal}[] {
+  async list(): Promise<${n.Pascal}[]> {
     return ${n.camelSingular}Repository.findAll();
   },
 
-  getById(id: string): ${n.Pascal} {
-    const ${n.camelSingular} = ${n.camelSingular}Repository.findById(id);
+  async getById(id: string): Promise<${n.Pascal}> {
+    const ${n.camelSingular} = await ${n.camelSingular}Repository.findById(id);
     if (!${n.camelSingular}) throw notFound("${n.Pascal} not found");
     return ${n.camelSingular};
   },
 
-  create(input: Create${n.Pascal}Input, actorId: string | null = null): ${n.Pascal} {
+  async create(input: Create${n.Pascal}Input, actorId: string | null = null): Promise<${n.Pascal}> {
 ${createChecks}    return ${n.camelSingular}Repository.create(input, actorId);
   },
 
-  update(id: string, input: Update${n.Pascal}Input, actorId: string | null = null): ${n.Pascal} {
-    const existing = ${n.camelSingular}Repository.findById(id);
+  async update(id: string, input: Update${n.Pascal}Input, actorId: string | null = null): Promise<${n.Pascal}> {
+    const existing = await ${n.camelSingular}Repository.findById(id);
     if (!existing) throw notFound("${n.Pascal} not found");
 
-${updateChecks}    const updated = ${n.camelSingular}Repository.update(id, input, actorId);
+${updateChecks}    const updated = await ${n.camelSingular}Repository.update(id, input, actorId);
     return updated!;
   },
 
-  remove(id: string, actorId: string | null = null): void {
-    const ok = ${n.camelSingular}Repository.softDelete(id, actorId);
+  async remove(id: string, actorId: string | null = null): Promise<void> {
+    const ok = await ${n.camelSingular}Repository.softDelete(id, actorId);
     if (!ok) throw notFound("${n.Pascal} not found");
   },
 };
@@ -322,19 +340,19 @@ import type { Create${n.Pascal}Input, Update${n.Pascal}Input } from "./types";
 
 /** HTTP layer: reads validated input, calls the service, shapes the response. */
 export const ${n.camelPlural}Controller = {
-  list(c: Context<AppEnv>) {
-    return c.json({ data: ${n.camelSingular}Service.list() });
+  async list(c: Context<AppEnv>) {
+    return c.json({ data: await ${n.camelSingular}Service.list() });
   },
 
-  getById(c: Context<AppEnv>) {
+  async getById(c: Context<AppEnv>) {
     const { id } = c.req.param();
-    return c.json({ data: ${n.camelSingular}Service.getById(id) });
+    return c.json({ data: await ${n.camelSingular}Service.getById(id) });
   },
 
   async create(c: Context<AppEnv>) {
     const body = (await c.req.json()) as Create${n.Pascal}Input;
     const actorId = c.get("user")?.id ?? null;
-    const ${n.camelSingular} = ${n.camelSingular}Service.create(body, actorId);
+    const ${n.camelSingular} = await ${n.camelSingular}Service.create(body, actorId);
     return c.json({ data: ${n.camelSingular} }, 201);
   },
 
@@ -342,14 +360,14 @@ export const ${n.camelPlural}Controller = {
     const { id } = c.req.param();
     const body = (await c.req.json()) as Update${n.Pascal}Input;
     const actorId = c.get("user")?.id ?? null;
-    const ${n.camelSingular} = ${n.camelSingular}Service.update(id, body, actorId);
+    const ${n.camelSingular} = await ${n.camelSingular}Service.update(id, body, actorId);
     return c.json({ data: ${n.camelSingular} });
   },
 
-  remove(c: Context<AppEnv>) {
+  async remove(c: Context<AppEnv>) {
     const { id } = c.req.param();
     const actorId = c.get("user")?.id ?? null;
-    ${n.camelSingular}Service.remove(id, actorId);
+    await ${n.camelSingular}Service.remove(id, actorId);
     return c.body(null, 204);
   },
 };
