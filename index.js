@@ -16,10 +16,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const templateDir = join(__dirname, "template");
 
-// Files renamed in the published template must be restored on scaffold.
+// Files/dirs renamed in the published template must be restored on scaffold.
 const RENAMES = [
   ["_gitignore", ".gitignore"],
   ["_dev.vars.example", ".dev.vars.example"],
+  ["_nexthono", ".nexthono"],
 ];
 
 const c = {

@@ -17,7 +17,9 @@
     "db:migrate:remote": "wrangler d1 migrations apply nexthono --remote",
     "db:seed": "tsx server/api/database/seeds.ts",
     "db:seed:remote": "tsx server/api/database/seeds.ts --remote",
-    "db:reset": "wrangler d1 execute nexthono --local --command \"DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS d1_migrations;\" && wrangler d1 migrations apply nexthono --local && tsx server/api/database/seeds.ts"
+    "db:reset": "wrangler d1 execute nexthono --local --command \"DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS d1_migrations;\" && wrangler d1 migrations apply nexthono --local && tsx server/api/database/seeds.ts",
+    "nexthono-module": "tsx .nexthono/create-module.ts",
+    "nexthono-field": "tsx .nexthono/add-field.ts"
   },
   "dependencies": {
     "@batistafull/wytext": "latest",
